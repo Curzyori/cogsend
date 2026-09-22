@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+    # Every branch. GitHub ignores branch pushes entirely when the only ref
+    # filter is a tag one, so this has to be said explicitly.
+    branches:
+      - '**'
+    # A tag points at a commit the branch push already tested, so tagging a
+    # release does not need a second full run.
+    tags-ignore:
+      - '**'
+  pull_request:
+  # A rewritten history (a squash) leaves no file diff to judge, and a release
+  # commit deserves a full run; both can be asked for by hand.
+  workflow_dispatch:
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Decides whether the browser suites are worth running. A README or docs edit
+  # cannot break them, and they are the slow half of CI; the check job always
+  # runs, because tests/platform-setup.test.ts reads docs/oauth-apps.md.
+  #
+  # Anything unexpected — no base commit to diff (a new branch, a forced push, a
+  # tag), a failed diff — runs everything: skipping a suite by accident is worse
+  # than spending three minutes.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The diff needs the pushed commit's parent, which a shallow clone does
+          # not have. This repository is small, so a full fetch is a couple of
+          # seconds.
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          base="${BEFORE:-}"
+          if [ "${EVENT:-}" = "pull_request" ]; then base="${PR_BASE:-}"; fi
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "No usable base commit (new branch, forced push or tag) — running every job."
+            exit 0
+          fi
+          if ! changed=$(git diff --name-only "$base" HEAD); then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "Could not diff against $base — running every job."
+            exit 0
+          fi
+          if [ -z "$changed" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "No file changes against $base (a rewritten history) — running every job."
+            exit 0
+          fi
+          echo "Changed files:"
+          printf '%s\n' "$changed" | sed 's/^/  /'
+          # Everything outside this list is code: the browser suites run.
+          if printf '%s\n' "$changed" | grep -qvE '^(docs/|README\.md$|CONTRIBUTING\.md$|SECURITY\.md$|THIRD-PARTY-NOTICES\.md$|LICENSE$)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "Code changed — the browser suites will run."
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "Docs only — skipping the browser suites."
+          fi
+
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Node 24 (npm 11) rather than 22 (npm 10): npm 10 still asks the
+          # retired /security/audits/quick endpoint for advisories, which now
+          # answers 400 "Invalid package tree" for any lockfile at all — so the
+          # audit below could never do its job there. npm 11 uses the supported
+          # bulk endpoint. Local development also runs Node 24.
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Dependency audit
+        # Fails on high/critical advisories; low-severity ones that only reach
+        # dev tooling (and have no upstream fix) stay below the threshold.
+        #
+        # A registry outage is not a finding: npm reports it as an error
+        # document instead of advisory data, which otherwise turns every push
+        # red while npm is down. That warns and passes; anything carrying
+        # advisory data still fails.
+        run: |
+          set +e
+          report=$(npm audit --json 2>/dev/null)
+          set -e
+          verdict=$(printf '%s' "$report" | node -e '
+            let raw = "";
+            process.stdin.on("data", (chunk) => (raw += chunk)).on("end", () => {
+              let data = null;
+              try {
+                data = JSON.parse(raw || "{}");
+              } catch {
+                console.log("unavailable:unparsable audit output");
+                return;
+              }
+              const counts = data.metadata?.vulnerabilities;
+              if (!counts) {
+                const reason =
+                  data.message ?? data.error?.summary ?? data.error?.code ?? "no advisory data";
+                console.log("unavailable:" + String(reason).split("\n")[0].slice(0, 160));
+                return;
+              }
+              const high = (counts.high ?? 0) + (counts.critical ?? 0);
+              console.log(high > 0 ? `vulnerable:${high}` : "clean");
+            });
+          ')
+          case "$verdict" in
+            clean)
+              echo "No high or critical advisories."
+              ;;
+            unavailable:*)
+              echo "::warning::npm audit could not run (${verdict#unavailable:}); skipping"
+              printf '%s' "$report" | head -c 400
+              echo
+              ;;
+            *)
+              npm audit --audit-level=high || true
+              echo "::error::${verdict#vulnerable:} high or critical advisories"
+              exit 1
+              ;;
+          esac
+
+      # Cheapest first, so an obvious break reports in seconds rather than after
+      # the test suite.
+      - run: npm run lint
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    needs: changes
+    # `!= 'false'` rather than `== 'true'`: an empty output (the changes job did
+    # something unexpected) runs the suites.
+    if: needs.changes.outputs.code != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One suite failing is a result, not a reason to cancel the other.
+      fail-fast: false
+      matrix:
+        # `main` runs with SKIP_TOTP so specs can sign in with a password.
+        # `totp` removes it, because enrolling an authenticator is the flow a new
+        # instance cannot skip; it restores .dev.vars afterwards. They are two
+        # runners, in parallel, because the second is a third of the first's
+        # duration and had been waiting for it.
+        suite: [main, totp]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # Same runtime the check job uses (and local development), so the
+          # Playwright suite exercises the version that ships.
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      # Seeds .dev.vars from tests/e2e/fixtures/dev.vars when missing, then runs
+      # against a dedicated local D1/R2 state dir (`.wrangler/e2e-state`).
+      # `wrangler dev` serves the built Worker locally, so no Cloudflare
+      # credentials are involved.
+      - run: npm run test:e2e${{ matrix.suite == 'totp' && ':totp' || '' }}
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-artifacts-${{ matrix.suite }}
+          path: test-results/
+          retention-days: 7
