@@ -30,6 +30,15 @@
 //   npm run setup -- --verbose          # print every command and its raw output
 //   npm run setup -- --no-color         # plain text, for logs and bug reports
 //
+// Not being signed in is not an error: `wrangler whoami --json` prints
+// `{"loggedIn": false}` and exits 1 in that case — the same exit code as a
+// broken install — so the probe below reads the answer, not the status. On a
+// terminal, setup then starts `wrangler login` itself (OAuth in the browser, no
+// API token needed) and continues where it left off. Without a terminal — a
+// pipe, a CI job, `--dry-run` — that flow cannot complete, so it says which
+// command to run instead. CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID work
+// too, because wrangler reads them and `whoami` reports a signed-in account.
+//
 // This is the only way to install: no browser flow can create the account, which
 // is what makes the claim window impossible rather than merely unlikely. It can
 // also pin APP_URL to the URL it just deployed to.
@@ -198,6 +207,38 @@ function listDatabases() {
 	}
 }
 
+/**
+ * One `wrangler whoami --json`.
+ *
+ * A signed-out wrangler exits 1 with `{"loggedIn": false}` on stdout, so the
+ * exit code cannot tell "signed out" from "wrangler is broken" — the output
+ * decides instead. The whoami JSON always answers `loggedIn` with a boolean;
+ * anything else is a real failure the caller must report rather than mistake
+ * for "signed out", which would offer a login that cannot fix it.
+ *
+ * @returns {{ account: any, raw: string }} `account` is null when the output was not the whoami JSON.
+ */
+function readWhoami() {
+	const result = wrangler(['whoami', '--json'], {
+		readOnly: true,
+		quiet: true,
+		allowFailure: true
+	});
+	const raw = `${result.stdout}${result.stderr}`;
+	try {
+		const account = JSON.parse(result.stdout);
+		return { account: typeof account?.loggedIn === 'boolean' ? account : null, raw };
+	} catch {
+		return { account: null, raw };
+	}
+}
+
+/** The last lines wrangler printed, for a failure that has to show them. */
+function outputTail(text) {
+	const lines = ui.stripToolNoise(text).split('\n').filter(Boolean);
+	return lines.length ? `\n${lines.slice(-5).join('\n')}` : '';
+}
+
 /** Minimal JSONC reader: the configs carry comments. */
 function readJsonc(file) {
 	const text = readFileSync(file, 'utf8')
@@ -326,14 +367,8 @@ async function main() {
 
 	// 1. Who are we deploying as?
 	say('1. Cloudflare account');
-	const who = wrangler(['whoami', '--json'], { readOnly: true, quiet: true });
-	if (who.status !== 0) fail('wrangler could not read your account.');
-	let account;
-	try {
-		account = JSON.parse(who.stdout);
-	} catch {
-		fail('could not parse `wrangler whoami --json`. Update wrangler and try again.');
-	}
+	let { account, raw } = readWhoami();
+	if (!account) fail(`wrangler could not read your account.${outputTail(raw)}`);
 	if (!account.loggedIn) {
 		if (DRY || !process.stdin.isTTY) {
 			fail(
@@ -341,9 +376,12 @@ async function main() {
 			);
 		}
 		info('not signed in yet — starting the browser login');
-		wrangler(['login'], { stream: true });
-		const after = wrangler(['whoami', '--json'], { readOnly: true, quiet: true });
-		account = JSON.parse(after.stdout || '{}');
+		// Not fatal on its own: the probe below decides, so a login that was
+		// refused (no browser, a closed tab) reads as "still not signed in"
+		// instead of a bare exit code.
+		wrangler(['login'], { stream: true, allowFailure: true });
+		({ account, raw } = readWhoami());
+		if (!account) fail(`wrangler could not read your account after the login.${outputTail(raw)}`);
 		if (!account.loggedIn) fail('Still not signed in. Run `npx wrangler login` and try again.');
 	}
 	const accounts = account.accounts ?? [];
