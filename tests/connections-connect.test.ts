@@ -9,7 +9,7 @@ import { POST as mastodonPOST } from '../src/routes/api/connections/mastodon/+se
 import { POST as threadsPOST } from '../src/routes/api/connections/threads/+server';
 import { POST as xPOST } from '../src/routes/api/connections/x/+server';
 import { platformName } from '$lib/domain/platforms';
-import { PLATFORM_SETUP } from '$lib/domain/platform-setup';
+import { PLATFORM_SECRET_NAMES, PLATFORM_SETUP } from '$lib/domain/platform-setup';
 import { OAUTH_PENDING_TTL_MS } from '$lib/domain/oauth-pending';
 
 /**
@@ -163,9 +163,17 @@ describe('connect routes', () => {
 			url: new URL('http://localhost/api/connections')
 		} as never)) as Response;
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { configured: Record<string, boolean>; appUrl?: string };
+		const body = (await res.json()) as {
+			configured: Record<string, boolean>;
+			secrets: Record<string, boolean>;
+			appUrl?: string;
+		};
 		expect(body.configured).toEqual({ linkedin: true, threads: true, x: true });
 		expect(body.appUrl).toBe('https://cogsend.example.com/');
+		// Presence per secret, not just per platform: this is what lets the
+		// dialog name the missing half instead of repeating "no credentials".
+		expect(Object.keys(body.secrets).sort()).toEqual([...PLATFORM_SECRET_NAMES].sort());
+		expect(Object.values(body.secrets).every(Boolean)).toBe(true);
 
 		const bare = (await (connectionsGET as (event: unknown) => Promise<Response>)({
 			request: new Request('http://localhost/api/connections'),
@@ -173,11 +181,31 @@ describe('connect routes', () => {
 			cookies: { get: () => 'session-token' },
 			url: new URL('http://localhost/api/connections')
 		} as never)) as Response;
-		expect(((await bare.json()) as { configured: Record<string, boolean> }).configured).toEqual({
+		const bareBody = (await bare.json()) as {
+			configured: Record<string, boolean>;
+			secrets: Record<string, boolean>;
+		};
+		expect(bareBody.configured).toEqual({
 			linkedin: false,
 			threads: false,
 			x: false
 		});
+		expect(Object.values(bareBody.secrets).some(Boolean)).toBe(false);
+		// Half uploaded: the state that used to be indistinguishable from
+		// nothing at all, because one missing secret disables the platform.
+		const half = (await (connectionsGET as (event: unknown) => Promise<Response>)({
+			request: new Request('http://localhost/api/connections'),
+			locals: locals({ env: { ...TEST_ENV, LINKEDIN_CLIENT_ID: 'li-client' } }),
+			cookies: { get: () => 'session-token' },
+			url: new URL('http://localhost/api/connections')
+		} as never)) as Response;
+		const halfBody = (await half.json()) as {
+			configured: Record<string, boolean>;
+			secrets: Record<string, boolean>;
+		};
+		expect(halfBody.secrets.LINKEDIN_CLIENT_ID).toBe(true);
+		expect(halfBody.secrets.LINKEDIN_CLIENT_SECRET).toBe(false);
+		expect(halfBody.configured.linkedin).toBe(false);
 	});
 
 	it('binds X state, stores a PKCE verifier and returns an authorize URL', async () => {

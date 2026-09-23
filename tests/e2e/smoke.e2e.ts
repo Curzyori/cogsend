@@ -256,13 +256,32 @@ test('a platform without app credentials shows its setup steps, not a failure', 
 	await expect(
 		page.getByRole('heading', { name: `${probe.name} isn't enabled yet` })
 	).toBeVisible();
-	await expect(page.getByTestId('setup-callback-uri')).toContainText(
-		`/api/connections/${probe.id}/callback`
-	);
+	// The steps stay collapsed so the panel is three lines and two rows, not a
+	// wall of text: the redirect URI lives under step 1, the secrets under 2.
+	await expect(page.getByTestId('setup-callback-uri')).toBeHidden();
+	await page.getByTestId('setup-step-1').click();
+	const redirectUri = page.getByTestId('setup-callback-uri');
+	await expect(redirectUri).toBeVisible();
+	await expect(redirectUri).toContainText(`/api/connections/${probe.id}/callback`);
+	await page.getByTestId('setup-step-2').click();
 	await expect(page.getByTestId('setup-command')).toHaveText(probe.command);
 	for (const secret of probe.secrets) {
 		await expect(page.getByText(secret, { exact: true })).toBeVisible();
 	}
+	// The other way to set them, for a reader without the checkout: the panel
+	// must not send someone to a command they cannot run.
+	await expect(page.getByTestId('platform-setup-panel')).toContainText('Cloudflare dashboard');
+	// Copying is the point of the block: the value has to reach the clipboard,
+	// not just look like it did.
+	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+	const copyUri = page.getByRole('button', { name: 'Copy the redirect URI' });
+	await copyUri.click();
+	// Icon-only button: the confirmation is the tick, announced to a screen
+	// reader through the status region rather than drawn as text.
+	await expect(page.getByTestId('copy-status').first()).toHaveText('Copied to clipboard');
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+		((await redirectUri.textContent()) ?? '').trim()
+	);
 	// The card is a setup entry point, not a connect attempt.
 	expect(connectCalls).toBe(0);
 
@@ -294,7 +313,6 @@ test('a stale callback error is explained, then dropped from the URL', async () 
 	await page.reload();
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
-
 test('settings defaults persist', async () => {
 	await page.goto('/settings');
 	// The version is injected at build time and shown here, so a bug report can

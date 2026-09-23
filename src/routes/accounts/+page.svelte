@@ -1,21 +1,24 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { Plus, X } from '@lucide/svelte';
+	import { ChevronDown, Plus, X } from '@lucide/svelte';
 	import { fade, fly } from 'svelte/transition';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import CopyButton from '$lib/components/CopyButton.svelte';
 	import AccountAvatar from '$lib/components/AccountAvatar.svelte';
 	import SocialIcon from '$lib/components/SocialIcon.svelte';
 	import { accountLabel, displayHost, platformName, platformRank } from '$lib/domain/platforms';
 	import { humanizeError } from '$lib/domain/human-error';
 	import {
 		PLATFORM_SETUP,
-		SETUP_GUIDE_URL,
 		callbackUri,
 		emptyStateSentence,
 		isOAuthPlatform,
+		missingSecrets,
 		needsSetup,
-		secretsPutCommand,
+		platformSecretNames,
+		secretsPutCommandFor,
+		setupGuideUrl,
 		type OAuthPlatformId
 	} from '$lib/domain/platform-setup';
 	import { sessionExpiredIfUnauthorized } from '$lib/components/session-expired';
@@ -37,6 +40,10 @@
 		threads: true,
 		x: true
 	});
+	// Per-secret presence from the API. The panel names the missing half of a
+	// half-configured platform instead of repeating "no credentials yet" for a
+	// client id that is already uploaded.
+	let secretPresence = $state<Record<string, boolean>>({});
 	let handle = $state('');
 	let appPassword = $state('');
 	let instanceUrl = $state('');
@@ -119,6 +126,9 @@
 					threads: payload.configured.threads !== false,
 					x: payload.configured.x !== false
 				};
+			}
+			if (payload.secrets && typeof payload.secrets === 'object') {
+				secretPresence = payload.secrets as Record<string, boolean>;
 			}
 		} catch (e) {
 			loadFailed = true;
@@ -515,62 +525,127 @@
 			</div>
 
 			{#if setupPanel}
-				{@const setup = PLATFORM_SETUP[setupPanel]}
-				<div class="space-y-4" data-testid="platform-setup-panel">
-					<button
-						type="button"
-						onclick={backToPlatforms}
-						class="text-[13px] font-bold text-stone-500 hover:text-stone-900"
-						>← All platforms</button
-					>
-					<h3 class="text-[17px] font-extrabold tracking-tight text-stone-900">
-						{platformName(setupPanel)} isn't enabled yet
-					</h3>
-					<p class="text-xs font-medium text-stone-500">
-						This deployment has no {platformName(setupPanel)} app credentials yet. They are Worker secrets,
-						so whoever deployed it adds them once.
-					</p>
-					<div class="space-y-3 rounded-2xl bg-stone-50 p-4">
-						<ol class="list-decimal space-y-2 pl-4 text-xs font-medium text-stone-600">
-							<li>
-								Create an app for {platformName(setupPanel)} in the provider's developer console and register
-								this redirect URI:
-								<code
-									class="mt-1 block font-mono text-[11px] break-all text-stone-900"
-									data-testid="setup-callback-uri"
-									>{callbackUri(setupPanel, appUrl || page.url.origin)}</code
+				{#key setupPanel}
+					{@const setup = PLATFORM_SETUP[setupPanel]}
+					{@const secretNames = platformSecretNames(setupPanel)}
+					{@const missing = missingSecrets(setupPanel, secretPresence)}
+					{@const alreadySet = secretNames.filter((name) => secretPresence[name])}
+					{@const redirectUri = callbackUri(setupPanel, appUrl || page.url.origin)}
+					{@const command = secretsPutCommandFor(missing)}
+					<div class="space-y-4" data-testid="platform-setup-panel">
+						<button
+							type="button"
+							onclick={backToPlatforms}
+							class="text-[13px] font-bold text-stone-500 hover:text-stone-900"
+							>← All platforms</button
+						>
+						<h3 class="text-[17px] font-extrabold tracking-tight text-stone-900">
+							{platformName(setupPanel)} isn't enabled yet
+						</h3>
+						<p class="text-xs font-medium text-stone-500">
+							This deployment has no {platformName(setupPanel)} app credentials yet. They are Worker secrets,
+							so whoever deployed it adds them once.
+						</p>
+						<div
+							class="divide-y divide-stone-200/80 overflow-hidden rounded-xl border border-stone-200/80"
+						>
+							<details class="group">
+								<summary
+									data-testid="setup-step-1"
+									class="flex cursor-pointer list-none items-center gap-2.5 p-3 text-xs font-bold text-stone-900 hover:bg-stone-50 [&::-webkit-details-marker]:hidden"
 								>
-							</li>
-							<li>
-								Add
-								{#each setup.secrets as secret, index (secret)}{index > 0 ? ' and ' : ''}<code
-										class="font-mono text-[11px] text-stone-900">{secret}</code
-									>{/each}{#if setup.optionalSecrets}, plus
-									{#each setup.optionalSecrets as secret, index (secret)}{index > 0
-											? ' and '
-											: ''}<code class="font-mono text-[11px] text-stone-900">{secret}</code>{/each}
-									for a confidential app{/if}, to
-								<code class="font-mono text-[11px] text-stone-900">.dev.vars</code>, then run
-								<code
-									class="mt-1 block font-mono text-[11px] break-words text-stone-900"
-									data-testid="setup-command">{secretsPutCommand(setupPanel)}</code
+									<span
+										class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-900 text-[10px] text-white"
+										>1</span
+									>
+									Create the app
+									<ChevronDown
+										class="ml-auto h-4 w-4 shrink-0 text-stone-400 transition-transform group-open:rotate-180"
+									/>
+								</summary>
+								<div class="space-y-2 px-3 pb-3 text-xs font-medium text-stone-600">
+									<p>
+										In the <a
+											href={setup.consoleUrl}
+											target="_blank"
+											rel="noreferrer"
+											class="font-bold text-stone-900 underline">{setup.consoleName}</a
+										>. {setup.consoleRequirement}
+									</p>
+									<p>Register this redirect URI in {setup.redirectField}:</p>
+									<div
+										class="flex items-center gap-1 rounded-xl border border-stone-200/80 bg-stone-50 py-1 pr-1 pl-3"
+									>
+										<code
+											class="min-w-0 flex-1 overflow-x-auto font-mono text-[11px] whitespace-nowrap text-stone-900 select-all"
+											data-testid="setup-callback-uri">{redirectUri}</code
+										>
+										<CopyButton value={redirectUri} ariaLabel="Copy the redirect URI" />
+									</div>
+								</div>
+							</details>
+							<details class="group">
+								<summary
+									data-testid="setup-step-2"
+									class="flex cursor-pointer list-none items-center gap-2.5 p-3 text-xs font-bold text-stone-900 hover:bg-stone-50 [&::-webkit-details-marker]:hidden"
 								>
-								and <code class="font-mono text-[11px] text-stone-900">npm run deploy</code>.
-							</li>
-							<li>Reload this page — the platform connects normally once the secrets are there.</li>
-						</ol>
+									<span
+										class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-stone-900 text-[10px] text-white"
+										>2</span
+									>
+									Add {missing.length === 1 ? 'the missing secret' : 'the secrets'} to .dev.vars
+									<ChevronDown
+										class="ml-auto h-4 w-4 shrink-0 text-stone-400 transition-transform group-open:rotate-180"
+									/>
+								</summary>
+								<div class="space-y-2 px-3 pb-3 text-xs font-medium text-stone-600">
+									<p>
+										Put {#each missing as secret, index (secret)}{index > 0 ? ' and ' : ''}<code
+												class="font-mono text-[11px] text-stone-900">{secret}</code
+											>{/each} in
+										<code class="font-mono text-[11px] text-stone-900">.dev.vars</code> — uncomment the
+										line if it is already there, otherwise add it — then run
+									</p>
+									{#if alreadySet.length}
+										<p>
+											Already set on the Worker:
+											{#each alreadySet as secret, index (secret)}{index > 0 ? ', ' : ''}<code
+													class="font-mono text-[11px] text-stone-900">{secret}</code
+												>{/each}.
+										</p>
+									{/if}
+									<div
+										class="flex items-center gap-1 rounded-xl border border-stone-200/80 bg-stone-50 py-1 pr-1 pl-3"
+									>
+										<code
+											class="min-w-0 flex-1 overflow-x-auto font-mono text-[11px] whitespace-nowrap text-stone-900 select-all"
+											data-testid="setup-command">{command}</code
+										>
+										<CopyButton value={command} ariaLabel="Copy the secrets command" />
+									</div>
+									<p class="text-[11px] text-stone-500">
+										No checkout on this machine? Add them in the Cloudflare dashboard instead:
+										Workers → your Worker → Settings → Variables and Secrets, then press Deploy.
+									</p>
+								</div>
+							</details>
+						</div>
+						<p class="text-xs font-medium text-stone-500">
+							Then reload this page — secrets go live as soon as the command finishes, with no
+							redeploy step.
+						</p>
 						{#if setup.note}
 							<p class="text-xs font-medium text-stone-500">{setup.note}</p>
 						{/if}
+						<a
+							href={setupGuideUrl(setupPanel)}
+							target="_blank"
+							rel="noreferrer"
+							class="inline-block text-[13px] font-bold text-stone-900 underline"
+							>Full {platformName(setupPanel)} steps</a
+						>
 					</div>
-					<a
-						href={SETUP_GUIDE_URL}
-						target="_blank"
-						rel="noreferrer"
-						class="inline-block text-[13px] font-bold text-stone-900 underline"
-						>Step-by-step guide</a
-					>
-				</div>
+				{/key}
 			{:else if modalForm === 'none'}
 				<div class="grid gap-3">
 					{#each availablePlatforms as platform (platform.id)}
