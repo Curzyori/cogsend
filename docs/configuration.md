@@ -37,6 +37,17 @@ with no signature and no expiry, protected only by the randomness in the object
 key. Keep the origin unlisted and treat a leaked URL as permanent; leave the
 variable unset to keep the short-lived signed route.
 
+Upload them with `npm run secrets:put` (or `npm run secrets:put NAME` for one),
+which reads `.dev.vars` and then reads the Worker's own secret list back to
+confirm what landed — it exits non-zero and names anything still missing. A name
+it skips is a name it could not find locally, and the message says which line it
+looked at. Worker secrets take effect immediately: there is no redeploy step
+after `secrets:put`, so a connect button that stays disabled is missing a
+credential, not a deploy.
+Without a checkout on the machine you are working from, the dashboard does the
+same job: Workers & Pages → your Worker → Settings → Variables and Secrets →
+Add → **Secret**, then **Deploy** to apply it.
+
 The login is not one of these secrets. `npm run setup` writes the account into D1
 — see [The login](#the-login) below.
 

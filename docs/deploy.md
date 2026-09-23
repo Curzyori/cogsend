@@ -96,7 +96,11 @@ cogsend-media` makes the bucket. Otherwise the deploy creates both.
 Optional secrets — `API_TOKEN` for scripts, `SCHEDULER_SECRET` for an external
 pinger, the OAuth client ids, Resend for failure emails, `MEDIA_PUBLIC_BASE_URL`
 for Meta's crawler — are listed under [Configuration](configuration.md#secrets). Upload them in one go
-with `npm run secrets:put`.
+with `npm run secrets:put`, which reads them from `.dev.vars` and then reads the
+Worker's own secret list back to confirm what landed. Secrets take effect
+immediately from the CLI, so a deploy is not what makes them live; in the
+dashboard (Workers & Pages → your Worker → Settings → Variables and Secrets →
+Add → **Secret**) press **Deploy** to apply them.
 
 Keep using `scripts/wrangler.mjs` instead of plain `npx wrangler` so your
 `wrangler.personal.jsonc` and `WRANGLER_PROFILE` apply — that is what the
