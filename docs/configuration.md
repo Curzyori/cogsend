@@ -84,6 +84,9 @@ wrangler.personal.jsonc` automatically when that file exists, plus `--profile
 WRANGLER_PROFILE=my-account npm run deploy
 ```
 
+`account_id` in that same file pins the account too, and unlike an environment
+variable it cannot be inherited by a script that spawns a process of its own.
+
 Because your changes live in files upstream never touches, `git pull upstream
 main` stays conflict-free. `npm run doctor` warns when the two configs disagree.
 
