@@ -10,6 +10,7 @@ import { POST as threadsPOST } from '../src/routes/api/connections/threads/+serv
 import { POST as xPOST } from '../src/routes/api/connections/x/+server';
 import { platformName } from '$lib/domain/platforms';
 import { PLATFORM_SETUP } from '$lib/domain/platform-setup';
+import { OAUTH_PENDING_TTL_MS } from '$lib/domain/oauth-pending';
 
 /**
  * The four connect entry points. They were untested: a regression here (a
@@ -190,6 +191,12 @@ describe('connect routes', () => {
 
 		const row = await pendingFor('x');
 		expect(row.clientId).toBe('x-client');
+		// The window a visitor has to get through the provider's login, 2FA and
+		// consent screens: too short and they come back to "oauth_expired" with
+		// nothing to act on.
+		const windowMs = row.expiresAt.getTime() - Date.now();
+		expect(windowMs).toBeGreaterThan(OAUTH_PENDING_TTL_MS - 60_000);
+		expect(windowMs).toBeLessThanOrEqual(OAUTH_PENDING_TTL_MS);
 		// The verifier travels encrypted, packed with the client secret.
 		expect(row.clientSecretEnc).not.toContain('x-secret');
 	});

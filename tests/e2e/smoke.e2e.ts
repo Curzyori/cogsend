@@ -281,6 +281,20 @@ test('a platform without app credentials shows its setup steps, not a failure', 
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+test('a stale callback error is explained, then dropped from the URL', async () => {
+	test.setTimeout(120_000);
+	// The callback redirects to /accounts?error=<code>. Before this, the code was
+	// echoed verbatim and stayed in the address bar, so a reload replayed an old
+	// failure next to a connection that had since succeeded.
+	await page.goto('/accounts?error=oauth_expired');
+	const alert = page.getByRole('alert');
+	await expect(alert).toContainText(/expired/i);
+	await expect(alert).not.toContainText('oauth_expired');
+	await expect(page).toHaveURL(/\/accounts$/);
+	await page.reload();
+	await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('settings defaults persist', async () => {
 	await page.goto('/settings');
 	// The version is injected at build time and shown here, so a bug report can

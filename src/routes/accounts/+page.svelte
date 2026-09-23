@@ -316,8 +316,19 @@
 	onMount(() => {
 		void load();
 		const params = page.url.searchParams;
-		if (params.get('connected')) msg = `Connected ${params.get('connected')}`;
-		if (params.get('error')) err = humanizeError(params.get('error'));
+		const connected = params.get('connected');
+		const failure = params.get('error');
+		if (connected) msg = `Connected ${connected}`;
+		if (failure) err = humanizeError(failure);
+		// Read once, then drop them from the address bar. The callback redirect
+		// is a full page load, so a stale `?error=` used to be replayed on every
+		// reload — an old failure sitting above a connection that has since
+		// succeeded, which reads as "still broken" and cannot be dismissed.
+		if (connected || failure) {
+			const url = new URL(page.url);
+			url.search = '';
+			history.replaceState(history.state, '', url);
+		}
 	});
 </script>
 
