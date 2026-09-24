@@ -61,6 +61,8 @@ export interface TestDb {
 	count: () => number;
 	/** Largest bound-parameter list in any one statement — D1 rejects over 100. */
 	maxParams: () => number;
+	/** SQL text of the statements in the most recent batch. */
+	lastBatchSql: () => string[];
 	reset: () => void;
 }
 
@@ -80,6 +82,7 @@ export async function createTestDb(): Promise<TestDb> {
 	// unit suite would otherwise miss that class of bug.
 	let queries = 0;
 	let maxParams = 0;
+	let lastBatchSql: string[] = [];
 	const noteParams = (statements: unknown[]) => {
 		for (const statement of statements) {
 			const args = (statement as { args?: unknown[] } | null)?.args;
@@ -96,6 +99,7 @@ export async function createTestDb(): Promise<TestDb> {
 	(client as unknown as Record<string, unknown>).batch = (async (stmts: unknown[]) => {
 		queries += (stmts as unknown[]).length;
 		noteParams(stmts as unknown[]);
+		lastBatchSql = (stmts as Array<{ sql?: string }>).map((s) => s?.sql ?? '');
 		return batchOrig(stmts as never);
 	}) as typeof batchOrig;
 	const db = drizzle(client, { schema }) as unknown as AppDb;
@@ -104,9 +108,11 @@ export async function createTestDb(): Promise<TestDb> {
 		close: () => client.close(),
 		count: () => queries,
 		maxParams: () => maxParams,
+		lastBatchSql: () => lastBatchSql,
 		reset: () => {
 			queries = 0;
 			maxParams = 0;
+			lastBatchSql = [];
 		}
 	};
 }

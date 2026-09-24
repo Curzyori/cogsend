@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { connections, drafts, publishTargets, users } from '$lib/server/db/schema';
 import { newId, type AppDb } from '$lib/server/db/client';
 import { createTestDb } from '$lib/server/db/test';
+import { SERIES_BUCKETS_PER_STATEMENT } from '$lib/server/insights-report';
 import {
 	bucketKind,
 	buildInsightSeries,
@@ -303,6 +304,7 @@ describe('GET /api/insights', () => {
 	let close: () => void;
 	let count: () => number;
 	let maxParams: () => number;
+	let lastBatchSql: () => string[];
 	let reset: () => void;
 
 	const localsFor = (
@@ -358,6 +360,7 @@ describe('GET /api/insights', () => {
 		close = harness.close;
 		count = harness.count;
 		maxParams = harness.maxParams;
+		lastBatchSql = harness.lastBatchSql;
 		reset = harness.reset;
 
 		vi.useFakeTimers({ toFake: ['Date'] });
@@ -523,6 +526,35 @@ describe('GET /api/insights', () => {
 			expect(maxParams(), `days=${days}`).toBeGreaterThan(10);
 			expect(maxParams(), `days=${days}`).toBeLessThanOrEqual(100);
 		}
+	});
+
+	it('aliases every chart bucket so D1 cannot collapse the columns', async () => {
+		reset();
+		const res = await insightsGET({
+			locals: localsFor('u1'),
+			url: new URL('http://localhost/api/insights?days=30')
+		} as never);
+		expect(res.status).toBe(200);
+		// D1 keys a result row by column name and collapses duplicates. The
+		// bucket expressions bind the status and both bounds, so without an
+		// alias every one reads the same, the 120 columns fold into one, and
+		// every bucket after the first decodes as 0.
+		const series = lastBatchSql().filter((sql) =>
+			sql.includes('coalesce(sum(case when "publish_targets"."status" = ?')
+		);
+		const buckets = 30;
+		expect(series).toHaveLength(Math.ceil(buckets / SERIES_BUCKETS_PER_STATEMENT));
+		series.forEach((sql, chunk) => {
+			const from = chunk * SERIES_BUCKETS_PER_STATEMENT;
+			const to = Math.min(from + SERIES_BUCKETS_PER_STATEMENT, buckets) - 1;
+			for (const index of [from, to]) {
+				for (const prefix of ['cp', 'cf', 'pp', 'pf']) {
+					expect(sql, `${prefix}${index}`).toContain(` as "${prefix}${index}"`);
+				}
+			}
+			// Every selected expression is aliased, not only the bucket edges.
+			expect(sql.match(/ as "/g) ?? [], `chunk ${chunk}`).toHaveLength(4 * (to - from + 1));
+		});
 	});
 
 	it('narrows the window and compares against the window right before it', async () => {

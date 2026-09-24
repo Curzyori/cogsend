@@ -26,10 +26,22 @@ function toMs(value: unknown): number | null {
 	return null;
 }
 
-function boundSum(status: 'published' | 'failed', bound: InsightBound): SQL<number> {
-	if (bound.end != null && bound.start >= bound.end) return sql<number>`0`;
+/**
+ * One chart bucket, under an explicit alias. D1 keys each result row by column
+ * name and collapses duplicate names; the status and both bounds are bound
+ * parameters, so without an alias every bucket's text is identical and the
+ * whole row folds into one column — every bucket after the first then reads 0.
+ */
+function boundSum(
+	alias: string,
+	status: 'published' | 'failed',
+	bound: InsightBound
+): SQL.Aliased<number> {
+	if (bound.end != null && bound.start >= bound.end) return sql<number>`0`.as(alias);
 	const upper = bound.end == null ? sql`` : sql` and ${publishTargets.updatedAt} < ${bound.end}`;
-	return sql<number>`coalesce(sum(case when ${publishTargets.status} = ${status} and ${publishTargets.updatedAt} >= ${bound.start}${upper} then 1 else 0 end), 0)`;
+	return sql<number>`coalesce(sum(case when ${publishTargets.status} = ${status} and ${publishTargets.updatedAt} >= ${bound.start}${upper} then 1 else 0 end), 0)`.as(
+		alias
+	);
 }
 
 /**
@@ -67,15 +79,15 @@ export async function loadInsights(
 	const seriesQueries: unknown[] = [];
 	for (let from = 0; from < frames.currentBounds.length; from += SERIES_BUCKETS_PER_STATEMENT) {
 		const to = Math.min(from + SERIES_BUCKETS_PER_STATEMENT, frames.currentBounds.length);
-		const shape: Record<string, SQL<number>> = {};
+		const shape: Record<string, SQL.Aliased<number>> = {};
 		for (let i = from; i < to; i++) {
 			const current = frames.currentBounds[i];
 			const previous = frames.previousBounds[i];
 			if (!current || !previous) continue;
-			shape[`cp${i}`] = boundSum('published', current);
-			shape[`cf${i}`] = boundSum('failed', current);
-			shape[`pp${i}`] = boundSum('published', previous);
-			shape[`pf${i}`] = boundSum('failed', previous);
+			shape[`cp${i}`] = boundSum(`cp${i}`, 'published', current);
+			shape[`cf${i}`] = boundSum(`cf${i}`, 'failed', current);
+			shape[`pp${i}`] = boundSum(`pp${i}`, 'published', previous);
+			shape[`pf${i}`] = boundSum(`pf${i}`, 'failed', previous);
 		}
 		seriesQueries.push(
 			db
