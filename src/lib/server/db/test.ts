@@ -59,6 +59,8 @@ export interface TestDb {
 	close: () => void;
 	/** Statements executed so far — D1's per-invocation budget is counted, not timed. */
 	count: () => number;
+	/** Largest bound-parameter list in any one statement — D1 rejects over 100. */
+	maxParams: () => number;
 	reset: () => void;
 }
 
@@ -73,15 +75,27 @@ export async function createTestDb(): Promise<TestDb> {
 	}
 	await client.execute('PRAGMA foreign_keys = ON');
 	// Count like D1 does: a batch counts as its statements, not one round trip.
+	// Also track the largest bound-parameter list: D1 rejects any single
+	// statement with more than 100, and libsql happily accepts them, so the
+	// unit suite would otherwise miss that class of bug.
 	let queries = 0;
+	let maxParams = 0;
+	const noteParams = (statements: unknown[]) => {
+		for (const statement of statements) {
+			const args = (statement as { args?: unknown[] } | null)?.args;
+			if (Array.isArray(args) && args.length > maxParams) maxParams = args.length;
+		}
+	};
 	const orig = client.execute.bind(client);
 	client.execute = (async (...args: Parameters<typeof orig>) => {
 		queries += 1;
+		noteParams(args as unknown[]);
 		return orig(...args);
 	}) as typeof orig;
 	const batchOrig = client.batch.bind(client) as (stmts: unknown[]) => Promise<unknown>;
 	(client as unknown as Record<string, unknown>).batch = (async (stmts: unknown[]) => {
 		queries += (stmts as unknown[]).length;
+		noteParams(stmts as unknown[]);
 		return batchOrig(stmts as never);
 	}) as typeof batchOrig;
 	const db = drizzle(client, { schema }) as unknown as AppDb;
@@ -89,7 +103,11 @@ export async function createTestDb(): Promise<TestDb> {
 		db,
 		close: () => client.close(),
 		count: () => queries,
-		reset: () => (queries = 0)
+		maxParams: () => maxParams,
+		reset: () => {
+			queries = 0;
+			maxParams = 0;
+		}
 	};
 }
 
