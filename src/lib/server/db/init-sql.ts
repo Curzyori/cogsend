@@ -42,8 +42,7 @@ CREATE TABLE IF NOT EXISTS \`oauth_pending\` (
 	\`client_id\` text NOT NULL,
 	\`client_secret_enc\` text NOT NULL,
 	\`expires_at\` integer NOT NULL,
-	\`created_at\` integer NOT NULL,
-	FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE
+	\`created_at\` integer NOT NULL
 );
 CREATE INDEX IF NOT EXISTS \`oauth_pending_expires_idx\` ON \`oauth_pending\` (\`expires_at\`);
 CREATE INDEX IF NOT EXISTS \`oauth_pending_user_idx\` ON \`oauth_pending\` (\`user_id\`);

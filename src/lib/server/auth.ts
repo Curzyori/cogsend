@@ -55,8 +55,10 @@ export function needsTotpEnroll(user: SessionUser | null): boolean {
 }
 
 // Domain-separated HMAC: session tokens live in the `session:` domain so a
-// token hash can never collide with MFA (`mfa:`), backup (`backup:`), gate
-// (`gate:`) or OAuth-state (`oauth-state:`) hashes even if raw values repeat.
+// token hash can never collide with MFA (`mfa:`), backup (`backup:`) or
+// OAuth-state (`oauth-state:`) hashes even if raw values repeat. Lockout
+// counters (auth-gate.ts) also hash through here, as `session:gate:…`: their
+// input is never a random token, and they live in their own rows.
 // NOTE: this invalidates sessions minted before the prefix was added — users
 // sign in again once after deploy.
 export async function hashToken(raw: string, secret: string): Promise<string> {

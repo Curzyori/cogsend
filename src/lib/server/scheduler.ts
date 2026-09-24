@@ -29,12 +29,7 @@ import {
 } from './db/schema';
 import type { AppEnv } from './env';
 import type { MediaStore } from './media';
-import {
-	isRetryableError,
-	MAX_PUBLISH_ATTEMPTS,
-	PUBLISH_RESERVE_CALLS,
-	publishTarget
-} from './publish';
+import { PUBLISH_RESERVE_CALLS, publishTarget } from './publish';
 import type { SubrequestBudget } from './budget';
 import { purgeExpiredMfaChallenges } from './totp';
 import { purgeExpiredSessions } from './auth';
@@ -505,20 +500,10 @@ export async function consumePublishJob(
 	targetId: string,
 	fetchImpl?: typeof fetch
 ) {
-	const result = await publishTarget(db, env, store, targetId, { fetchImpl });
-	if (result.status === 'failed' && result.error && isRetryableError(result.error)) {
-		// Redeliver only while attempts remain: without this, a MAX-exhausted
-		// row re-throws forever (publishTarget re-claims `failed` rows) and
-		// the poison message wedges the queue.
-		const row = await first(
-			db
-				.select({ attemptCount: publishTargets.attemptCount })
-				.from(publishTargets)
-				.where(eq(publishTargets.id, targetId))
-		);
-		if ((row?.attemptCount ?? MAX_PUBLISH_ATTEMPTS) < MAX_PUBLISH_ATTEMPTS) {
-			throw new Error(result.error);
-		}
-	}
-	return result;
+	// A retryable failure is not thrown back to the queue. publishTarget has
+	// already rescheduled the row with backoff, so an immediate redelivery could
+	// never claim it — it would only spend a queue retry. The tick hands the row
+	// to the queue again once it is due. Infrastructure errors still throw, and
+	// the queue retries those.
+	return publishTarget(db, env, store, targetId, { fetchImpl });
 }

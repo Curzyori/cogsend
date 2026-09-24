@@ -265,9 +265,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 		}
 	}
 
-	// Rate limiting for the two endpoints anybody can call. Checked before any
-	// D1 work, because the point is to keep a burst from reaching PBKDF2 at all.
-	// The in-app lockout below is still what stops a determined attacker.
+	// Rate limiting for the two endpoints anybody can call. Checked before the
+	// route runs, because the point is to keep a burst from reaching PBKDF2 at
+	// all. The in-app lockout is still what stops a determined attacker.
 	if (isRateLimitedPath(path)) {
 		const problem = await rateLimitProblem(
 			(platformEnv as unknown as Record<string, unknown>).AUTH_RATE_LIMITER as
