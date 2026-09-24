@@ -597,3 +597,43 @@ describe('bluesky idempotent record keys', () => {
 		).rejects.toThrow(/createRecord/i);
 	});
 });
+
+describe('bluesky session refresh', () => {
+	const jwt = (exp: number) =>
+		`h.${btoa(JSON.stringify({ exp })).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')}.s`;
+
+	it('reads the expiry of an access token', async () => {
+		const { jwtExpiryMs } = await import('$lib/server/providers/bluesky');
+		expect(jwtExpiryMs(jwt(1_900_000_000))).toBe(1_900_000_000_000);
+		expect(jwtExpiryMs('not-a-jwt')).toBeNull();
+		expect(jwtExpiryMs(undefined)).toBeNull();
+		expect(jwtExpiryMs('a.b.c')).toBeNull();
+	});
+
+	it('keeps a fresh session and refreshes one about to expire', async () => {
+		let refreshes = 0;
+		const fetchImpl = mockFetch({
+			'com.atproto.server.refreshSession': () => {
+				refreshes += 1;
+				return Response.json({ accessJwt: 'new', refreshJwt: 'new-r', did: 'did:plc:me' });
+			}
+		});
+		const base = { handle: 'me.bsky.social', appPassword: 'x', did: 'did:plc:me', refreshJwt: 'r' };
+		const inAnHour = Math.floor(Date.now() / 1000) + 3600;
+		const fresh = { ...base, accessJwt: jwt(inAnHour) };
+		expect(await blueskyProvider.refreshIfNeeded!(fresh, fetchImpl)).toBe(fresh);
+		expect(refreshes).toBe(0);
+
+		const inAMinute = Math.floor(Date.now() / 1000) + 60;
+		const stale = await blueskyProvider.refreshIfNeeded!(
+			{ ...base, accessJwt: jwt(inAMinute) },
+			fetchImpl
+		);
+		expect(refreshes).toBe(1);
+		expect(stale.accessJwt).toBe('new');
+
+		// An opaque token gets refreshed, as every publish used to.
+		await blueskyProvider.refreshIfNeeded!({ ...base, accessJwt: 'opaque' }, fetchImpl);
+		expect(refreshes).toBe(2);
+	});
+});

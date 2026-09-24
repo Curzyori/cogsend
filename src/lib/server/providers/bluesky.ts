@@ -76,6 +76,22 @@ export function buildLinkFacets(text: string): Array<{
 	return facets;
 }
 
+/** Refresh when an access token has less than this left. */
+const ACCESS_JWT_SKEW_MS = 5 * 60_000;
+
+/** The `exp` of a JWT in milliseconds, or null when it cannot be read. */
+export function jwtExpiryMs(token: string | undefined): number | null {
+	const payload = token?.split('.')[1];
+	if (!payload) return null;
+	try {
+		const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+		const exp = (JSON.parse(json) as { exp?: unknown }).exp;
+		return typeof exp === 'number' && Number.isFinite(exp) ? exp * 1000 : null;
+	} catch {
+		return null;
+	}
+}
+
 async function ensureSession(
 	creds: ConnectionCredentials,
 	fetchImpl: FetchLike
@@ -491,6 +507,11 @@ export const blueskyProvider: PlatformProvider = {
 	},
 
 	async refreshIfNeeded(creds, fetchImpl = providerFetch) {
+		// Refreshing rotates the refresh token and costs a call, so only do it
+		// when the access token is close to running out. A token whose expiry
+		// cannot be read is refreshed, as every publish used to.
+		const exp = jwtExpiryMs(creds.accessJwt);
+		if (creds.did && exp !== null && exp - Date.now() > ACCESS_JWT_SKEW_MS) return creds;
 		return refreshSession(creds, fetchImpl);
 	}
 };

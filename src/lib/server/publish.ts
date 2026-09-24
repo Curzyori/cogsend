@@ -549,14 +549,25 @@ export async function publishTarget(
 		const fetchImpl = options.budget ? countingFetch(baseFetch, options.budget) : baseFetch;
 		let workingCreds = creds;
 		if (provider.refreshIfNeeded) {
-			workingCreds = await provider.refreshIfNeeded(creds, fetchImpl);
-			await db
-				.update(connections)
-				.set({
-					credentialsEncrypted: await encryptJson(workingCreds, env.APP_ENCRYPTION_KEY),
-					updatedAt: new Date()
-				})
-				.where(eq(connections.id, conn.id));
+			workingCreds = await refreshWithStoredRetry(
+				db,
+				env,
+				conn.id,
+				conn.credentialsEncrypted,
+				creds,
+				(c) => provider.refreshIfNeeded!(c, fetchImpl)
+			);
+			// Most publishes refresh nothing; writing the same credentials back
+			// would spend a call of the request's budget for no change.
+			if (JSON.stringify(workingCreds) !== JSON.stringify(creds)) {
+				await db
+					.update(connections)
+					.set({
+						credentialsEncrypted: await encryptJson(workingCreds, env.APP_ENCRYPTION_KEY),
+						updatedAt: new Date()
+					})
+					.where(eq(connections.id, conn.id));
+			}
 		}
 
 		// Identity healing: reconcile stored credentials with the live one
@@ -693,6 +704,41 @@ export async function publishTarget(
 			}
 		);
 		return { status: nextStatus, error: message };
+	}
+}
+
+/**
+ * Refresh a credential, tolerating a refresh another publish just did.
+ *
+ * Some platforms rotate the refresh token on every use, so when two publishes
+ * of one account refresh at the same moment, the slower one presents a token
+ * that has just been replaced and is refused. The winner has already stored the
+ * new credentials by then; reading them back and trying once more turns that
+ * race into a success instead of an "expired" account. A refusal with nothing
+ * newer stored is a real one and propagates.
+ */
+async function refreshWithStoredRetry(
+	db: AppDb,
+	env: AppEnv,
+	connectionId: string,
+	readCiphertext: string,
+	creds: ConnectionCredentials,
+	refresh: (creds: ConnectionCredentials) => Promise<ConnectionCredentials>
+): Promise<ConnectionCredentials> {
+	try {
+		return await refresh(creds);
+	} catch (err) {
+		if (classifyProviderError(err).code !== 'auth') throw err;
+		const latest = await first(
+			db
+				.select({ credentialsEncrypted: connections.credentialsEncrypted })
+				.from(connections)
+				.where(eq(connections.id, connectionId))
+		);
+		if (!latest?.credentialsEncrypted || latest.credentialsEncrypted === readCiphertext) throw err;
+		return refresh(
+			await decryptJson<ConnectionCredentials>(latest.credentialsEncrypted, env.APP_ENCRYPTION_KEY)
+		);
 	}
 }
 
