@@ -67,24 +67,22 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 			.select({ id: publishTargets.id })
 			.from(publishTargets)
 			.where(and(eq(publishTargets.connectionId, conn.id), isNull(publishTargets.remotePostId)));
+		// Attempt history hangs off publish_targets. Delete it only for the
+		// targets actually removed: a claim that raced in after the snapshot
+		// kept its row, and its attempt row carries the resume checkpoint
+		// (segmentIds) a partial-thread retry reads, so deleting it would make
+		// the retry repost from segment 0. Explicit instead of relying on the
+		// best-effort FK cascade, so orphaned attempts cannot linger forever.
+		const kept = new Set(remaining.map((t) => t.id));
+		for (const chunk of chunkIds(removable.map((t) => t.id).filter((id) => !kept.has(id)))) {
+			await locals.db
+				.delete(publishAttempts)
+				.where(inArray(publishAttempts.publishTargetId, chunk));
+		}
 		if (remaining.length) {
 			// The guard raced a real claim: keep the connection intact and let
 			// the user retry once the publish settles.
 			return fail('Publishing in progress — try again shortly', 409);
-		}
-		// Attempt history hangs off publish_targets. Delete it only after the
-		// re-check above proved every removable target settled: a claim that
-		// raced in after the snapshot left its row behind, and its attempt row
-		// carries the resume checkpoint (segmentIds) a partial-thread retry
-		// reads — deleting it there would make the retry repost from segment 0.
-		// Explicit instead of relying on the best-effort FK cascade, so
-		// orphaned attempts cannot linger forever.
-		if (removable.length) {
-			for (const chunk of chunkIds(removable.map((t) => t.id))) {
-				await locals.db
-					.delete(publishAttempts)
-					.where(inArray(publishAttempts.publishTargetId, chunk));
-			}
 		}
 
 		if (archived > 0) {

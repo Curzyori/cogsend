@@ -404,8 +404,11 @@ describe('DELETE /api/connections/[id] — archive, not destroy', () => {
 		const target = await addTarget(draft, conn);
 		// Interleaving: the route snapshots the targets (not in flight), then a
 		// claim lands — publishing + its attempt row with a resume checkpoint —
-		// and only then does the route run its deletes.
+		// before the route's first delete of any kind.
+		let landed = false;
 		const claimLands = async () => {
+			if (landed) return;
+			landed = true;
 			await db
 				.update(publishTargets)
 				.set({ status: 'publishing', attemptCount: 1, updatedAt: new Date() })
@@ -423,14 +426,7 @@ describe('DELETE /api/connections/[id] — archive, not destroy', () => {
 			const builder = (realDelete as (t: unknown) => { where: (c: never) => Promise<unknown> })(
 				table
 			);
-			// The claim lands between the route's snapshot and its targets
-			// delete (i.e. inside the guard→delete race window).
-			if (table === publishTargets) {
-				return {
-					where: (cond: never) => claimLands().then(() => builder.where(cond))
-				};
-			}
-			return builder;
+			return { where: (cond: never) => claimLands().then(() => builder.where(cond)) };
 		};
 		try {
 			const res = await disconnect(conn);
