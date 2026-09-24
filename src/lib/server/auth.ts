@@ -183,7 +183,7 @@ export async function getSessionUser(
 		await db.delete(sessions).where(eq(sessions.id, row.sessionId));
 		return null;
 	}
-	if (isSessionIdle(row.lastSeenAt, now)) {
+	if (isSessionIdle(row.lastSeenAt, now, Boolean(row.remember))) {
 		await db.delete(sessions).where(eq(sessions.id, row.sessionId));
 		return null;
 	}

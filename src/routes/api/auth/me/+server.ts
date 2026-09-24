@@ -6,7 +6,15 @@ import { chunkIds } from '$lib/server/db/client';
 import { draftMedia, drafts, users } from '$lib/server/db/schema';
 import { fail, handleError, ok } from '$lib/server/http';
 import { requireSession } from '$lib/server/require';
-import { assertAuthGateOpen, clearAuthGate, recordAuthGateFailure } from '$lib/server/auth-gate';
+import {
+	assertAuthGateOpen,
+	assertPasswordGateOpen,
+	clearAuthGate,
+	clearPasswordGate,
+	recordAuthGateFailure,
+	recordPasswordFailure
+} from '$lib/server/auth-gate';
+import { rateLimitKey } from '$lib/server/rate-limit';
 import { checkUserCode } from '$lib/server/totp';
 import { verifyPassword } from '$lib/server/crypto';
 import { deleteMediaObjects } from '$lib/server/media';
@@ -94,15 +102,20 @@ export const DELETE: RequestHandler = async ({ request, locals, cookies, url }) 
 		const row = await getAdminUser(locals.db);
 		if (!row) return fail('This instance has no account yet', 409);
 
-		await assertAuthGateOpen(locals.db, locals.env, row.id, 'password');
+		await assertPasswordGateOpen(locals.db, locals.env, row.id, rateLimitKey(request.headers));
 		if (!(await verifyPassword(password, row.passwordHash))) {
-			const gate = await recordAuthGateFailure(locals.db, locals.env, row.id, 'password');
+			const gate = await recordPasswordFailure(
+				locals.db,
+				locals.env,
+				row.id,
+				rateLimitKey(request.headers)
+			);
 			return fail(
 				gate.locked ? 'Too many attempts — try again later' : 'That password is not correct',
 				401
 			);
 		}
-		await clearAuthGate(locals.db, locals.env, row.id, 'password');
+		await clearPasswordGate(locals.db, locals.env, row.id, rateLimitKey(request.headers));
 
 		if (!locals.env.skipTotp) {
 			await assertAuthGateOpen(locals.db, locals.env, row.id, 'totp-gate');
