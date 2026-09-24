@@ -793,6 +793,69 @@ test('overflow paste auto-splits across cards', async () => {
 	}
 });
 
+/**
+ * The link preview's title is `truncate` (nowrap), so it feeds the card's
+ * min-content width; without min-w-0 on the card that single line stretched the
+ * card past the composer column and the preview visually left the thread card.
+ * The OG payload is stubbed because the regression needs only a long
+ * single-line title — the real endpoint must not decide whether it reproduces.
+ */
+test('a long link preview stays inside its thread card', async () => {
+	await page.goto('/compose');
+	await page.route('**/api/link-preview*', (route) =>
+		route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({
+				url: 'https://example.com/long-title',
+				title: `Example article — ${'a long unbroken page title '.repeat(12)}`,
+				description: 'A description that wraps inside the card.',
+				image: null,
+				siteName: 'example.com'
+			})
+		})
+	);
+	// The second card is what makes the two widths comparable, so a
+	// thread-capable destination has to be selected: a stored default from an
+	// earlier test can leave only LinkedIn on.
+	await clickUntilVisible(
+		page,
+		page.getByTestId('destinations-toggle'),
+		page.locator('button[title="Bluesky: test.bsky.social"]')
+	);
+	const bluesky = page.locator('button[title="Bluesky: test.bsky.social"]');
+	if ((await bluesky.getAttribute('aria-pressed')) !== 'true') await bluesky.click();
+	await page.keyboard.press('Escape');
+
+	await fillUntilKept(page.getByTestId('segment-input-0'), 'first post');
+	await clickUntilVisible(
+		page,
+		page.getByTestId('add-thread-post'),
+		page.getByTestId('segment-input-1')
+	);
+	await fillUntilKept(page.getByTestId('segment-input-1'), 'https://example.com/long-title');
+	await expect(page.getByTestId('link-preview')).toBeVisible();
+
+	const measured = await page.evaluate(() => {
+		const box = (id: string) =>
+			document.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
+		const plain = box('segment-card-0');
+		const linked = box('segment-card-1');
+		const preview = box('link-preview');
+		return {
+			plainWidth: Math.round(plain.width),
+			linkedWidth: Math.round(linked.width),
+			previewOverhang: Math.round(preview.right - linked.right),
+			sideways: document.documentElement.scrollWidth - window.innerWidth
+		};
+	});
+	// A card with a link is no wider than one without, its preview stays inside
+	// it, and nothing pushes the document sideways.
+	expect(measured.linkedWidth).toBe(measured.plainWidth);
+	expect(measured.previewOverhang).toBeLessThanOrEqual(0);
+	expect(measured.sideways).toBeLessThanOrEqual(0);
+});
+
 test('Alt+Arrow keys reorder thread posts and follow the media', async () => {
 	await page.goto('/compose');
 	await fillUntilKept(page.getByTestId('segment-input-0'), 'first post');

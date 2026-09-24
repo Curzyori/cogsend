@@ -2349,9 +2349,13 @@
 						{/if}
 					</div>
 
-					<!-- Input Area -->
+					<!-- Input Area. min-w-0 is load-bearing: the link preview's title
+					truncates (nowrap), and a flex item's default min-width:auto let
+					that one line set this card's min-content width, stretching the
+					card past the composer column instead of ellipsizing. -->
 					<div
-						class="flex flex-1 flex-col rounded-[1.5rem] border border-stone-200/80 bg-white p-5 shadow-[0_4px_24px_-8px_rgb(28_25_23/0.06)] transition-all focus-within:border-stone-500 focus-within:shadow-[0_8px_30px_-12px_rgb(28_25_23/0.12)] focus-within:ring-2 focus-within:ring-stone-900/10"
+						data-testid="segment-card-{index}"
+						class="flex min-w-0 flex-1 flex-col rounded-[1.5rem] border border-stone-200/80 bg-white p-5 shadow-[0_4px_24px_-8px_rgb(28_25_23/0.06)] transition-all focus-within:border-stone-500 focus-within:shadow-[0_8px_30px_-12px_rgb(28_25_23/0.12)] focus-within:ring-2 focus-within:ring-stone-900/10"
 					>
 						<textarea
 							use:autoResize={segment}
