@@ -592,7 +592,14 @@ test('a saved draft restores the accounts it was written for', async () => {
 	await expect(page.getByTestId('segment-input-0')).toHaveValue('selection restore probe', {
 		timeout: 60000
 	});
-	await page.getByTestId('destinations-toggle').click();
+	// The value above is server-rendered, so it can be on screen before Svelte
+	// has hydrated. A bare click here is lost and the popover never opens; this
+	// is the race clickUntilVisible exists for (see tests/e2e/e2e-env.ts).
+	await clickUntilVisible(
+		page,
+		page.getByTestId('destinations-toggle'),
+		page.locator('button[title="Bluesky: test.bsky.social"]')
+	);
 	await expect(page.locator('button[title="Bluesky: test.bsky.social"]')).toHaveAttribute(
 		'aria-pressed',
 		'true',
