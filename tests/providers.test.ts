@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { blueskyProvider, mastodonProvider } from '$lib/server/providers';
 import { waitForMastodonMedia } from '$lib/server/providers/mastodon';
 import type { FetchLike } from '$lib/server/providers/types';
+import { TID_RE, targetRecordKey } from '$lib/domain/tid';
 
 function mockFetch(
 	handlers: Record<string, (req: Request) => Promise<Response> | Response>
@@ -530,12 +531,56 @@ describe('bluesky idempotent record keys', () => {
 				Response.json({ uri: 'at://did:plc:me/app.bsky.feed.post/key', cid: 'cid-1' })
 		});
 
+		const key = targetRecordKey('target-1', Date.UTC(2026, 0, 1), 0);
 		const result = await blueskyProvider.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
-			idempotencyKey: (i) => `target-1:${i}`
+			// Mastodon's key must not leak into the record key: it is no TID.
+			idempotencyKey: (i) => `target-1:${i}`,
+			recordKey: (i) => targetRecordKey('target-1', Date.UTC(2026, 0, 1), i)
 		});
-		expect(captured.body?.rkey).toBe('target-1:0');
-		// Resolved rather than posted twice: the caller records the existing post.
-		expect(result.remotePostId).toBe('at://did:plc:me/app.bsky.feed.post/target-1:0');
+		expect(captured.body?.rkey).toBe(key);
+		expect(captured.body?.rkey).toMatch(TID_RE);
+		// Resolved rather than posted twice: the caller records the existing post,
+		// with the cid the next reply in a thread would need.
+		expect(result.remotePostId).toBe(`at://did:plc:me/app.bsky.feed.post/${key}`);
+		expect(result.segmentCids).toEqual(['cid-1']);
+	});
+
+	it('recognises its own post behind the generic 500 a PDS answers for a taken key', async () => {
+		// The repository layer throws a plain Error for a duplicate key, which
+		// the PDS turns into an opaque 500 — the lookup is what tells the two apart.
+		const key = targetRecordKey('target-3', Date.UTC(2026, 0, 1), 0);
+		let lookups = 0;
+		const fetchImpl = session({
+			'com.atproto.repo.createRecord': () =>
+				new Response(
+					JSON.stringify({ error: 'InternalServerError', message: 'Internal Server Error' }),
+					{ status: 500 }
+				),
+			'com.atproto.repo.getRecord': (req) => {
+				lookups += 1;
+				expect(new URL(req.url).searchParams.get('rkey')).toBe(key);
+				return Response.json({ uri: `at://did:plc:me/app.bsky.feed.post/${key}`, cid: 'cid-9' });
+			}
+		});
+		const result = await blueskyProvider.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
+			recordKey: (i) => targetRecordKey('target-3', Date.UTC(2026, 0, 1), i)
+		});
+		expect(lookups).toBe(1);
+		expect(result.remotePostId).toBe(`at://did:plc:me/app.bsky.feed.post/${key}`);
+		expect(result.segmentCids).toEqual(['cid-9']);
+	});
+
+	it('reports a real server error when nothing exists at the key', async () => {
+		const fetchImpl = session({
+			'com.atproto.repo.createRecord': () => new Response('upstream down', { status: 502 }),
+			'com.atproto.repo.getRecord': () =>
+				new Response(JSON.stringify({ error: 'RecordNotFound' }), { status: 400 })
+		});
+		await expect(
+			blueskyProvider.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
+				recordKey: (i) => targetRecordKey('target-4', Date.UTC(2026, 0, 1), i)
+			})
+		).rejects.toThrow(/createRecord failed \(502\)/);
 	});
 
 	it('still fails loudly when the refusal is not a duplicate', async () => {
@@ -547,7 +592,7 @@ describe('bluesky idempotent record keys', () => {
 		});
 		await expect(
 			blueskyProvider.publish({ text: 'hello' }, creds, undefined, fetchImpl, {
-				idempotencyKey: (i) => `target-2:${i}`
+				recordKey: (i) => targetRecordKey('target-2', Date.UTC(2026, 0, 1), i)
 			})
 		).rejects.toThrow(/createRecord/i);
 	});

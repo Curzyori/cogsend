@@ -11,6 +11,7 @@ import { decodeImageDimensions } from './image-dimensions';
 import { parsePollConfig } from '$lib/domain/poll';
 import { signPublicMediaUrl } from './public-media';
 import { resolvePublishSegments } from '$lib/domain/thread-segments';
+import { targetRecordKey } from '$lib/domain/tid';
 import { decryptJson, encryptJson } from './crypto';
 import { chunkIds, first, newId, parseJson, type AppDb } from './db/client';
 import {
@@ -508,7 +509,9 @@ export async function publishTarget(
 					// Deliberately not attempt-scoped: the whole point is that a
 					// retry of the same target and segment carries the same key, so
 					// a provider that saw the first request recognises the second.
-					idempotencyKey: (segmentIndex: number) => `${targetId}:${segmentIndex}`
+					idempotencyKey: (segmentIndex: number) => `${targetId}:${segmentIndex}`,
+					recordKey: (segmentIndex: number) =>
+						targetRecordKey(targetId, target.createdAt.getTime(), segmentIndex)
 				}
 			);
 		} finally {
