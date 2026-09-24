@@ -119,18 +119,82 @@
 		error?: string | null;
 	};
 
+	type EditorDraft = {
+		id: string;
+		baseBody?: string | null;
+		selectedConnectionIds?: string[] | null;
+		variants?: Array<{
+			platform: string;
+			body?: string | null;
+			optionsJson?: { visibility?: string; spoilerText?: string; poll?: unknown };
+		}>;
+		media?: MediaItem[];
+		targets?: Array<{ connectionId?: string | null }>;
+	};
+
 	let {
 		initialConnections = [],
 		initialSettings = null,
+		initialDraft = null,
 		displayName = null,
 		videoEnabled = false
 	}: {
 		initialConnections?: Connection[];
 		initialSettings?: ProfileSettings | null;
+		initialDraft?: EditorDraft | null;
 		displayName?: string | null;
 		/** In-progress LinkedIn video uploads; the server decides, this is the affordance. */
 		videoEnabled?: boolean;
 	} = $props();
+
+	// The open draft is rendered with the page. A later id change still fetches.
+	function openedDraft(): EditorDraft | null {
+		const id = page.url.searchParams.get('id');
+		if (!initialDraft || !id || initialDraft.id !== id) return null;
+		return initialDraft;
+	}
+	const seededDraft = openedDraft();
+	const seededBody = seededDraft?.baseBody || '';
+	const seededOverrides = seededDraft
+		? overridesFromVariants(
+				(seededDraft.variants || []).map((variant) => ({
+					platform: variant.platform,
+					body: variant.body ?? null
+				})),
+				seededBody
+			)
+		: {};
+	const seededMedia = (seededDraft?.media || []).map((m) => ({
+		...m,
+		segmentIndex: m.segmentIndex ?? 0
+	}));
+	// svelte-ignore state_referenced_locally
+	let seededVisibility = initialSettings?.mastoVisibility ?? 'public';
+	let seededCw = '';
+	let seededPoll: PollConfig | null = null;
+	for (const variant of seededDraft?.variants || []) {
+		if (variant.platform === 'mastodon' && variant.optionsJson) {
+			const visibility = variant.optionsJson.visibility;
+			if (
+				visibility === 'public' ||
+				visibility === 'unlisted' ||
+				visibility === 'private' ||
+				visibility === 'direct'
+			) {
+				seededVisibility = visibility;
+			}
+			if (variant.optionsJson.spoilerText) seededCw = variant.optionsJson.spoilerText;
+			if (variant.optionsJson.poll) seededPoll = parsePollConfig(variant.optionsJson.poll);
+		}
+	}
+	const seededSelection = (() => {
+		const saved = seededDraft?.selectedConnectionIds;
+		if (Array.isArray(saved)) return saved;
+		const targetIds = (seededDraft?.targets || [])
+			.map((t) => t.connectionId)
+			.filter((id): id is string => Boolean(id));
+		return targetIds.length ? targetIds : null;
+	})();
 
 	/** What the file picker accepts, and what a drop is filtered down to. */
 	const ACCEPTED_MEDIA = $derived(
@@ -146,15 +210,15 @@
 	);
 
 	let draftId = $state<string | null>(page.url.searchParams.get('id'));
-	let baseBody = $state('');
+	let baseBody = $state(seededBody);
 	let activeTab = $state<ActiveTab>('global');
-	let overrides = $state<PlatformOverrideMap>({});
+	let overrides = $state<PlatformOverrideMap>(seededOverrides);
 	// Snapshot on purpose: the server-rendered list paints first; the client
 	// refresh replaces it via loadConnections().
 	// svelte-ignore state_referenced_locally
 	let connections = $state<Connection[]>(initialConnections);
 	let selected = $state<Set<string>>(new Set());
-	let media = $state<MediaItem[]>([]);
+	let media = $state<MediaItem[]>(seededMedia);
 	let saving = $state(false);
 	let publishing = $state(false);
 	// Single toast. Success auto-dismisses; problems stay until
@@ -167,10 +231,9 @@
 	let schedDate = $state('');
 	let schedTime = $state('');
 	// Snapshot on purpose: defaults apply to a fresh editor only.
-	// svelte-ignore state_referenced_locally
-	let mastoVisibility = $state(initialSettings?.mastoVisibility ?? 'public');
-	let mastoCW = $state('');
-	let mastoPoll = $state<PollConfig | null>(null);
+	let mastoVisibility = $state(seededVisibility);
+	let mastoCW = $state(seededCw);
+	let mastoPoll = $state<PollConfig | null>(seededPoll);
 	let focusedSegment = $state(0);
 	let uploadingSegment = $state<number | null>(null);
 	let dirty = $state(false);
@@ -200,11 +263,13 @@
 	let announceTimer: ReturnType<typeof setTimeout> | null = null;
 	// Platforms with a persisted variant row. A save only DELETEs rows that
 	// exist instead of firing a DELETE for every platform on every save.
-	let storedVariants = new Set<PlatformId>();
+	let storedVariants = new Set<PlatformId>(
+		(seededDraft?.variants || []).map((v) => v.platform as PlatformId)
+	);
 	let reconnecting = $state<string | null>(null);
 	let didInitSelection = false;
 	let savedSnapshot = $state<string | null>(null);
-	let pendingSelected: string[] | null = null;
+	let pendingSelected: string[] | null = seededSelection;
 	// True only when the user changed the account selection (never when the
 	// editor initializes or restores one). Used to decide whether an in-flight
 	// draft load may overwrite the current selection.
@@ -1912,7 +1977,7 @@
 		}
 	}
 
-	let loadedDraftContentFor: string | null = null;
+	let loadedDraftContentFor: string | null = seededDraft?.id ?? null;
 	let initLoadedFor: string | null | undefined = undefined;
 	$effect(() => {
 		const id = page.url.searchParams.get('id');

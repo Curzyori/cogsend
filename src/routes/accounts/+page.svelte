@@ -24,6 +24,8 @@
 	import { sessionExpiredIfUnauthorized } from '$lib/components/session-expired';
 	import { dialogFocus } from '$lib/components/dialog-focus';
 
+	let { data } = $props();
+
 	type Connection = {
 		id: string;
 		platform: string;
@@ -34,28 +36,40 @@
 		status: string;
 	};
 
-	let connections = $state<Connection[]>([]);
-	let configured = $state<{ linkedin: boolean; threads: boolean; x: boolean }>({
-		linkedin: true,
-		threads: true,
-		x: true
-	});
+	// Same order load() applies after a refresh, so the first paint matches it.
+	// svelte-ignore state_referenced_locally
+	let connections = $state<Connection[]>(
+		[...(data.connections ?? [])].sort(
+			(a: Connection, b: Connection) => platformRank(a.platform) - platformRank(b.platform)
+		)
+	);
+	// svelte-ignore state_referenced_locally
+	let configured = $state<{ linkedin: boolean; threads: boolean; x: boolean }>(
+		data.configured ?? {
+			linkedin: true,
+			threads: true,
+			x: true
+		}
+	);
 	// Per-secret presence from the API. The panel names the missing half of a
 	// half-configured platform instead of repeating "no credentials yet" for a
 	// client id that is already uploaded.
-	let secretPresence = $state<Record<string, boolean>>({});
+	// svelte-ignore state_referenced_locally
+	let secretPresence = $state<Record<string, boolean>>(data.secrets ?? {});
 	let handle = $state('');
 	let appPassword = $state('');
 	let instanceUrl = $state('');
 	let msg = $state<string | null>(null);
-	let err = $state<string | null>(null);
+	// svelte-ignore state_referenced_locally
+	let err = $state<string | null>(data.loadFailed ? 'Could not load accounts' : null);
 	let loading = $state(false);
 	// First-load flag: while true show skeleton rows instead of the
 	// "No accounts yet" empty state (avoids flash on every visit).
-	let initialLoading = $state(true);
+	let initialLoading = $state(false);
 	// Distinguishes "the list is empty" from "the list never arrived": the
 	// former gets the connect prompt, the latter must not.
-	let loadFailed = $state(false);
+	// svelte-ignore state_referenced_locally
+	let loadFailed = $state(Boolean(data.loadFailed));
 	let verifying = $state<string | null>(null);
 	let pendingDisconnect = $state<{ id: string; label: string } | null>(null);
 	let disconnectBusy = $state(false);
@@ -65,7 +79,8 @@
 	// dialog shows its setup steps instead of a request that can only fail.
 	let setupPanel = $state<OAuthPlatformId | null>(null);
 	// The deployment's own APP_URL, for the redirect URI the provider needs.
-	let appUrl = $state('');
+	// svelte-ignore state_referenced_locally
+	let appUrl = $state(data.appUrl ?? '');
 	let connectCloseBtn: HTMLButtonElement | null = $state(null);
 
 	const availablePlatforms = [
@@ -102,8 +117,9 @@
 	];
 
 	async function load() {
-		initialLoading = true;
+		if (connections.length === 0) initialLoading = true;
 		loadFailed = false;
+		err = null;
 		try {
 			const res = await fetch('/api/connections');
 			if (sessionExpiredIfUnauthorized(res)) {
@@ -324,7 +340,6 @@
 	}
 
 	onMount(() => {
-		void load();
 		const params = page.url.searchParams;
 		const connected = params.get('connected');
 		const failure = params.get('error');
@@ -386,9 +401,18 @@
 				{/each}
 			</div>
 		{:else if loadFailed && connections.length === 0}
-			<p class="p-6 text-sm font-medium text-stone-500">
-				Accounts could not be loaded. The message above says why — retry in a moment.
-			</p>
+			<div class="flex flex-wrap items-center gap-3 p-6">
+				<p class="min-w-0 flex-1 text-sm font-medium text-stone-500">
+					Accounts could not be loaded. The message above says why — retry in a moment.
+				</p>
+				<button
+					type="button"
+					onclick={() => void load()}
+					class="rounded-full border border-stone-300 bg-white px-4 py-1.5 text-[12px] font-bold text-stone-900 transition-colors hover:bg-stone-100"
+				>
+					Retry
+				</button>
+			</div>
 		{:else if connections.length === 0}
 			<p class="p-6 text-sm font-medium text-stone-500">{emptyStateSentence(configured)}</p>
 		{:else}
