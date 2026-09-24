@@ -38,9 +38,7 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square"></a>
 </p>
 
-<p align="center">
-  <img width="880" alt="CogSend screenshot" src="https://github.com/user-attachments/assets/e701a2f5-0c58-4302-b775-84f1e3a694a7" />
-</p>
+https://github.com/user-attachments/assets/4e1e623b-e862-4f70-8b48-b764590834f5
 
 ## Features
 
