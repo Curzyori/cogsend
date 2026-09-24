@@ -2,12 +2,14 @@ import { eq, inArray } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 import { getAdminUser, isFullyVerified, needsTotpEnroll } from '$lib/server/auth';
 import { clearMfaCookie, clearSessionCookie } from '$lib/server/cookies';
+import { chunkIds } from '$lib/server/db/client';
 import { draftMedia, drafts, users } from '$lib/server/db/schema';
 import { fail, handleError, ok } from '$lib/server/http';
 import { requireSession } from '$lib/server/require';
 import { assertAuthGateOpen, clearAuthGate, recordAuthGateFailure } from '$lib/server/auth-gate';
 import { checkUserCode } from '$lib/server/totp';
 import { verifyPassword } from '$lib/server/crypto';
+import { deleteMediaObjects } from '$lib/server/media';
 
 export const GET: RequestHandler = async ({ locals }) => {
 	const user = locals.user;
@@ -50,18 +52,16 @@ async function deleteMedia(
 			.limit(MEDIA_DELETE_BATCH);
 		if (!files.length) return { deleted, done: true };
 
-		const keys = files.map((f) => f.storageKey);
-		if (locals.media.deleteMany) await locals.media.deleteMany(keys);
-		else for (const key of keys) await locals.media.delete(key);
-
-		// One statement for the whole batch: the ids come from a select this
-		// request already paid for, and D1 counts statements, not rows.
-		await locals.db.delete(draftMedia).where(
-			inArray(
-				draftMedia.id,
-				files.map((f) => f.id)
-			)
+		await deleteMediaObjects(
+			locals.media,
+			files.map((f) => f.storageKey)
 		);
+
+		// One statement per 100 ids: the ids come from a select this request
+		// already paid for, and D1 caps a statement at 100 bound parameters.
+		for (const chunk of chunkIds(files.map((f) => f.id))) {
+			await locals.db.delete(draftMedia).where(inArray(draftMedia.id, chunk));
+		}
 		deleted += files.length;
 		// A short batch is the last one: there is nothing left to read.
 		if (files.length < MEDIA_DELETE_BATCH) return { deleted, done: true };

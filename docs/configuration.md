@@ -69,6 +69,23 @@ signed media URLs must use. A pinned value does not follow a hostname change, so
 update it if you move — [Domains and URLs](deploy.md#domains-and-urls) has the
 steps, and the redirect URIs that go with them.
 
+## Faster post thumbnails
+
+The Posts grid asks for small copies of its image attachments. A deployment with
+the Cloudflare Images binding downscales each still image once to a 160px JPEG,
+caches it in the media bucket, and serves it instead of the full-size original:
+
+```jsonc
+// wrangler.jsonc, or wrangler.personal.jsonc for a personal deployment
+"images": { "binding": "IMAGES" }
+```
+
+The binding name must stay `IMAGES`. Transformations of images stored in R2 are
+part of the Images Free plan (5,000 unique transformations a month, then $0.50
+per 1,000); because the result is cached, each image is transformed once, not
+once per view. Without the binding, and for GIFs, videos, or an encode that
+fails, the original is served — this is a speed-up, not a requirement.
+
 ## Keeping your own deployment separate from upstream
 
 If you run your own instance while pulling updates from this repo, keep your

@@ -129,6 +129,93 @@ export function assertSafeStorageKey(key: string): string {
 	return key;
 }
 
+/** Private media keys never change, so the browser can keep them. */
+export const PRIVATE_MEDIA_CACHE = 'private, max-age=31536000, immutable';
+/** Longest edge of a posts-grid thumbnail. CSS shows 80px; this covers 2x. */
+export const THUMB_EDGE = 160;
+
+export function thumbCacheKey(storageKey: string): string {
+	return `thumb/${storageKey}`;
+}
+
+/**
+ * Still images larger than the grid. GIF stays original so animation survives,
+ * and an image that is already small is not worth a second encode.
+ */
+export function thumbCandidate(
+	mime: string | null | undefined,
+	width: number | null | undefined,
+	height: number | null | undefined
+): boolean {
+	const type = (mime || '').toLowerCase().split(';')[0].trim();
+	if (type !== 'image/jpeg' && type !== 'image/png' && type !== 'image/webp') return false;
+	if (width && height && width <= THUMB_EDGE && height <= THUMB_EDGE) return false;
+	return true;
+}
+
+/**
+ * Optional Cloudflare Images binding (`images.binding = "IMAGES"`). Absent on
+ * a deployment that has not enabled it, in which case the original is served.
+ */
+export interface ImageResizer {
+	input(source: ReadableStream | ArrayBuffer | Uint8Array): {
+		transform(opts: { width: number; fit: 'scale-down' }): {
+			output(opts: { format: string; quality: number }): Promise<{ response(): Response }>;
+		};
+	};
+}
+
+export async function storedThumbnail(
+	store: MediaStore,
+	key: string,
+	images: ImageResizer | null | undefined
+): Promise<Uint8Array | null> {
+	const cacheKey = thumbCacheKey(key);
+	const cached = await store.get(cacheKey);
+	if (cached) return cached;
+	if (!images) return null;
+	const original = await store.get(key);
+	if (!original) return null;
+	try {
+		const copy = new Uint8Array(original.byteLength);
+		copy.set(original);
+		const rendered = await images
+			.input(new Blob([copy]).stream())
+			.transform({ width: THUMB_EDGE, fit: 'scale-down' })
+			.output({ format: 'image/jpeg', quality: 75 });
+		const response = await rendered.response();
+		if (!response.ok) return null;
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		if (!bytes.byteLength) return null;
+		await store.put(cacheKey, bytes, 'image/jpeg');
+		return bytes;
+	} catch {
+		return null;
+	}
+}
+
+export function jpegResponse(bytes: Uint8Array, cacheControl: string): Response {
+	return new Response(bytes as unknown as BodyInit, {
+		headers: {
+			'Content-Type': 'image/jpeg',
+			'Cache-Control': cacheControl,
+			'X-Content-Type-Options': 'nosniff',
+			'Content-Length': String(bytes.byteLength)
+		}
+	});
+}
+
+/** Drop an object and any cached thumbnail. Missing keys are fine. */
+export async function deleteMediaObjects(store: MediaStore, keys: string[]): Promise<void> {
+	const all = keys.flatMap((key) => [key, thumbCacheKey(key)]);
+	if (!all.length) return;
+	if (store.deleteMany) {
+		await store.deleteMany(all);
+		return;
+	}
+	for (const key of all) await store.delete(key);
+}
+
 // MIME types the server will ever serve. Anything else in D1 (manual edit,
 // future bug) falls back to octet-stream so attacker bytes never render as
 // HTML in the app origin.
