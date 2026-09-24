@@ -10,6 +10,29 @@ import { requireScope, requireUser } from '$lib/server/require';
 import { serializeDraft } from '$lib/server/serialize';
 import { connectionIdsOverflow, normalizeConnectionIds } from '$lib/domain/request-limits';
 
+/**
+ * A destination this request did not start because its Cloudflare call budget
+ * might not cover it (see $lib/server/budget). Its target is a due "publish now"
+ * row, so the scheduler publishes it on the next tick.
+ */
+function queuedResult(
+	targetId: string,
+	conn: { id: string; platform: string; handle: string | null; displayName: string | null }
+) {
+	return {
+		targetId,
+		connectionId: conn.id,
+		platform: conn.platform,
+		handle: conn.handle,
+		displayName: conn.displayName,
+		status: 'pending',
+		permalink: null,
+		error: null,
+		skipped: true,
+		deferred: true
+	};
+}
+
 export const POST: RequestHandler = async ({ params, request, locals, platform }) => {
 	try {
 		const user = requireUser(locals.user);
@@ -57,6 +80,9 @@ export const POST: RequestHandler = async ({ params, request, locals, platform }
 		const results = [];
 		/** Set when the batch was cut short by an infrastructure failure. */
 		let stopped: string | null = null;
+		/** Set once a target was left for the scheduler: the rest follow it. */
+		let deferring = false;
+		let attempted = 0;
 		for (const item of ensured) {
 			const conn = conns.find((c) => c.id === item.target.connectionId);
 			if (!conn) continue;
@@ -94,10 +120,24 @@ export const POST: RequestHandler = async ({ params, request, locals, platform }
 			// disconnect, which covers the common publish. Longer runs that
 			// still get cut are rescheduled by the scheduler (retryable
 			// failures become `scheduled` with backoff).
+			if (deferring) {
+				results.push(queuedResult(item.target.id, conn));
+				continue;
+			}
 			try {
-				const task = publishTarget(locals.db, locals.env, locals.media, item.target.id);
+				const task = publishTarget(locals.db, locals.env, locals.media, item.target.id, {
+					budget: locals.budget,
+					mustTry: attempted === 0
+				});
 				platform?.ctx?.waitUntil(task.then(() => undefined).catch(() => undefined));
 				const result = await task;
+				if (result.deferred) {
+					// Left as a due "publish now" row: the next tick publishes it.
+					deferring = true;
+					results.push(queuedResult(item.target.id, conn));
+					continue;
+				}
+				attempted += 1;
 				const row = await first(
 					locals.db.select().from(publishTargets).where(eq(publishTargets.id, item.target.id))
 				);

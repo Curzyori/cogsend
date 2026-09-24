@@ -48,7 +48,8 @@ const wanted = keys.length
 			'RESEND_API_KEY',
 			'NOTIFY_EMAIL',
 			'NOTIFY_FROM',
-			'ENABLE_VIDEO_UPLOAD'
+			'ENABLE_VIDEO_UPLOAD',
+			'SUBREQUEST_LIMIT'
 		];
 
 // One read, one parser: `parseDevVars` answers "what would the Worker load",

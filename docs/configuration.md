@@ -31,11 +31,21 @@ cannot reach anything except the tick (see [Scheduling](scheduling.md)).
 | `RESEND_API_KEY`, `NOTIFY_EMAIL`, `NOTIFY_FROM` | failure digests by email                                      |
 | `MEDIA_PUBLIC_BASE_URL`                         | serving Meta's crawler from a public media origin (see below) |
 | `ENABLE_VIDEO_UPLOAD`                           | LinkedIn video, wired but unverified                          |
+| `SUBREQUEST_LIMIT`                              | publishing more per tick on a paid Workers plan (see below)   |
 
 `MEDIA_PUBLIC_BASE_URL` is a trade-off: it serves media from a public origin
 with no signature and no expiry, protected only by the randomness in the object
 key. Keep the origin unlisted and treat a leaked URL as permanent; leave the
 variable unset to keep the short-lived signed route.
+
+`SUBREQUEST_LIMIT` is the number of calls one request may make: D1 statements,
+R2 operations and requests to the platforms all count. Cloudflare allows 50 on
+Workers Free and 10,000 on Paid, and the app cannot tell which plan it runs on,
+so it assumes Free. Leave it unset on Free. On Paid, set it to `10000` so a tick
+or a multi-account publish sends everything at once instead of a post or two per
+request. Setting it higher than your plan allows brings back the risk it exists
+to prevent: a request that runs out after a platform accepted a post, and a
+second copy of that post later.
 
 Upload them with `npm run secrets:put` (or `npm run secrets:put NAME` for one),
 which reads `.dev.vars` and then reads the Worker's own secret list back to

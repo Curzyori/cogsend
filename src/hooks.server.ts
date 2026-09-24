@@ -24,6 +24,12 @@ import { users } from '$lib/server/db/schema';
 import { envFromPlatform } from '$lib/server/env';
 import type { AppEnv } from '$lib/server/env';
 import { memoryMediaStore, r2MediaStore } from '$lib/server/media';
+import {
+	countingD1,
+	countingMediaStore,
+	parseSubrequestLimit,
+	SubrequestBudget
+} from '$lib/server/budget';
 import { runSchedulerTick } from '$lib/server/scheduler';
 import { securityHeadersFor } from '$lib/server/security-headers';
 import { isPinnedAppUrl } from '$lib/domain/app-url';
@@ -91,8 +97,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 		throw new Error('D1 binding DB is missing. Run via vite (adapter-cloudflare) or wrangler.');
 	}
 
-	await ensureSchemaOnce(platformEnv.DB);
-	const db = createD1Db(platformEnv.DB);
+	// Every D1, R2 and queue call below is counted against this request's
+	// subrequest limit; see $lib/server/budget.
+	const budget = new SubrequestBudget(
+		parseSubrequestLimit((platformEnv as unknown as Record<string, unknown>).SUBREQUEST_LIMIT)
+	);
+	event.locals.budget = budget;
+	const d1 = countingD1(platformEnv.DB, budget);
+	await ensureSchemaOnce(d1);
+	const db = createD1Db(d1);
 	event.locals.db = db;
 	// A deployment only learns its URL once it exists, so APP_URL is normally
 	// derived from the request itself (see $lib/domain/app-url) — and recorded
@@ -135,7 +148,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// rows against a per-request in-memory Map silently loses bytes on next
 	// request. DEV keeps the memory fallback for local runs without R2.
 	if (platformEnv.MEDIA) {
-		event.locals.media = r2MediaStore(platformEnv.MEDIA);
+		event.locals.media = countingMediaStore(r2MediaStore(platformEnv.MEDIA), budget);
 	} else if (import.meta.env.DEV) {
 		// Once per isolate, not once per request: the notice is about the
 		// missing binding, and a local run (or a test file) makes dozens of
@@ -149,7 +162,14 @@ export const handle: Handle = async ({ event, resolve }) => {
 		throw new Error('R2 binding MEDIA is missing. Configure an R2 bucket for media storage.');
 	}
 	const queue = platformEnv.PUBLISH_QUEUE;
-	event.locals.queue = queue ? { send: (body) => queue.send(body) } : null;
+	event.locals.queue = queue
+		? {
+				send: (body) => {
+					budget.count();
+					return queue.send(body);
+				}
+			}
+		: null;
 
 	event.locals.authMethod = null;
 	event.locals.apiKeyScopes = null;

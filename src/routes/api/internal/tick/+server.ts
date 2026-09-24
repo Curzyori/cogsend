@@ -16,7 +16,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		// still outlast that — leftovers stay due and run on the next tick.
 		const task = runSchedulerTick(locals.db, locals.env, {
 			store: locals.media,
-			queue: locals.queue
+			queue: locals.queue,
+			budget: locals.budget
 		});
 		platform?.ctx?.waitUntil(task.then(() => undefined).catch(() => undefined));
 		const result = await task;

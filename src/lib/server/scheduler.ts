@@ -29,7 +29,13 @@ import {
 } from './db/schema';
 import type { AppEnv } from './env';
 import type { MediaStore } from './media';
-import { isRetryableError, MAX_PUBLISH_ATTEMPTS, publishTarget } from './publish';
+import {
+	isRetryableError,
+	MAX_PUBLISH_ATTEMPTS,
+	PUBLISH_RESERVE_CALLS,
+	publishTarget
+} from './publish';
+import type { SubrequestBudget } from './budget';
 import { purgeExpiredMfaChallenges } from './totp';
 import { purgeExpiredSessions } from './auth';
 
@@ -385,7 +391,14 @@ export async function claimDueTargets(db: AppDb, now = new Date(), limit = TICK_
 export async function runSchedulerTick(
 	db: AppDb,
 	env: AppEnv,
-	opts: { store: MediaStore; queue?: QueueLike | null; fetchImpl?: typeof fetch }
+	opts: {
+		store: MediaStore;
+		queue?: QueueLike | null;
+		fetchImpl?: typeof fetch;
+		/** This request's subrequest count. Without one, the tick behaves as
+		 *  before and works through every due target. */
+		budget?: SubrequestBudget | null;
+	}
 ) {
 	await writeHeartbeat(db);
 	await expireOauthPending(db);
@@ -400,8 +413,13 @@ export async function runSchedulerTick(
 	await recoverStalePublishing(db);
 	const due = await claimDueTargets(db);
 	const results: Array<{ id: string; status: string }> = [];
+	const budget = opts.budget ?? null;
 	for (const t of due) {
 		if (opts.queue) {
+			// A hand-off is a write and a queue send. Once the budget cannot
+			// cover one more and what the tick still has to do, the rest wait
+			// for the next tick.
+			if (budget && results.length > 0 && budget.remaining < 2 + PUBLISH_RESERVE_CALLS) break;
 			// Hand off without pre-claiming: only tag the row. The consumer's
 			// publishTarget performs the real claim (status + attempt bump),
 			// so a pre-set 'publishing' can never trap it into a skip.
@@ -442,8 +460,17 @@ export async function runSchedulerTick(
 		}
 		try {
 			const result = await publishTarget(db, env, opts.store, t.id, {
-				fetchImpl: opts.fetchImpl
+				fetchImpl: opts.fetchImpl,
+				budget,
+				// The first one always runs: deferring it would defer it forever.
+				mustTry: results.length === 0
 			});
+			if (result.deferred) {
+				// Might not finish inside this request's budget. Still due, so
+				// the next tick starts with it; later rows keep their order.
+				results.push({ id: t.id, status: 'deferred' });
+				break;
+			}
 			results.push({ id: t.id, status: result.status });
 		} catch (err) {
 			// Only infrastructure failures reach here: provider failures are
@@ -467,7 +494,8 @@ export async function runSchedulerTick(
 	} catch (err) {
 		console.error('[scheduler] failure digest failed', err);
 	}
-	return { processed: results.length, results, digest };
+	const deferred = results.filter((r) => r.status === 'deferred').length;
+	return { processed: results.length - deferred, deferred, results, digest };
 }
 
 export async function consumePublishJob(

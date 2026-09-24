@@ -22,6 +22,7 @@ import {
 } from '$lib/domain/deploy-cron';
 import { first, type AppDb } from './db/client';
 import { appSettings } from './db/schema';
+import { rawBinding } from './budget';
 
 export const APP_URL_SETTING = 'app_url';
 export const APP_NAME_SETTING = 'app_name';
@@ -35,10 +36,11 @@ type CacheKey = object;
 
 const cache = new WeakMap<CacheKey, Map<string, string | null>>();
 
-/** The drizzle handle is rebuilt per request; the D1 binding behind it is not. */
+/** The drizzle handle is rebuilt per request; the D1 binding behind it is not
+ *  (each request wraps it to count calls, hence the unwrap). */
 function cacheKey(db: AppDb): CacheKey | null {
 	const session = (db as unknown as { session?: { client?: unknown } }).session;
-	const client = session?.client;
+	const client = rawBinding(session?.client);
 	return client && typeof client === 'object' ? (client as CacheKey) : null;
 }
 

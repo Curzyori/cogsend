@@ -1176,7 +1176,7 @@
 					const data = await res.json().catch(() => ({}));
 					if (!res.ok) throw new Error(data.error || 'Publish failed');
 					const row = (data.results || [])[0] as
-						{ status?: string; error?: string | null } | undefined;
+						{ status?: string; error?: string | null; deferred?: boolean } | undefined;
 					if (!row) throw new Error('Publish failed');
 					if (row.status === 'published') {
 						setDestinationProgress(connectionId, { status: 'published', error: null });
@@ -1185,6 +1185,13 @@
 					if (row.status === 'publishing') {
 						setDestinationProgress(connectionId, { status: 'publishing', error: null });
 						return { connectionId, status: 'publishing' as const, error: null };
+					}
+					if (row.deferred) {
+						// Left for the scheduler's next tick (the request's call
+						// budget ran short): it is on its way, not failed.
+						const message = 'Queued — goes out on the next scheduler tick';
+						setDestinationProgress(connectionId, { status: 'retrying', error: message });
+						return { connectionId, status: 'retrying' as const, error: message };
 					}
 					if (row.status === 'scheduled') {
 						// Retryable failure: the scheduler retries with backoff.

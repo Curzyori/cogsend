@@ -668,10 +668,13 @@
 			const res = await fetch('/api/scheduler/test', { method: 'POST' });
 			const payload = await res.json().catch(() => ({}));
 			if (!res.ok) throw new Error(payload.error || 'The tick failed');
+			// The tick stops at the first post that might not fit this request's
+			// Cloudflare call limit; the rest stay due.
+			const later = payload.deferred > 0 ? ' The rest go out on the next tick.' : '';
 			tickTestMessage =
-				payload.processed === 0
+				payload.processed === 0 && !later
 					? 'Tick ran: nothing was due.'
-					: `Tick ran: ${payload.processed} post${payload.processed === 1 ? '' : 's'} handled.`;
+					: `Tick ran: ${payload.processed} post${payload.processed === 1 ? '' : 's'} handled.${later}`;
 			await load();
 		} catch (e) {
 			err = humanizeError(e instanceof Error ? e.message : 'The tick failed');
