@@ -45,6 +45,11 @@ the command finishes. Either way, reload the accounts page when you are done.
    npm run secrets:put LINKEDIN_CLIENT_ID LINKEDIN_CLIENT_SECRET
    ```
 
+LinkedIn issues refresh tokens only to approved Marketing Developer Platform
+partners, so a self-created app gets a 60-day access token and nothing to renew
+it with. Posts keep going out until that token expires; after that the account
+shows as expired, and **Reconnect** on the Accounts page starts a new 60 days.
+
 ### Threads
 
 1. Create an app in the [Meta for Developers](https://developers.facebook.com/apps/)

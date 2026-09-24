@@ -517,11 +517,13 @@ export const linkedinProvider: PlatformProvider = {
 	},
 
 	refreshImpossibleReason(creds): string | null {
-		if (creds.expiresAt && creds.expiresAt - Date.now() > REFRESH_SKEW_MS) return null;
-		if (!creds.refreshToken || !creds.clientId || !creds.clientSecret) {
-			return 'LinkedIn token cannot be refreshed (incomplete credentials) — reconnect';
-		}
-		return null;
+		if (creds.refreshToken && creds.clientId && creds.clientSecret) return null;
+		// Refresh tokens are only issued to approved Marketing Developer Platform
+		// apps, so most connections have none and live on a 60-day access token.
+		// That token keeps working until it expires: only a token that has
+		// actually run out makes a publish pointless.
+		if (!creds.expiresAt || creds.expiresAt > Date.now()) return null;
+		return 'LinkedIn token expired and cannot be refreshed — reconnect';
 	},
 
 	async refreshIfNeeded(creds, fetchImpl = providerFetch): Promise<ConnectionCredentials> {
