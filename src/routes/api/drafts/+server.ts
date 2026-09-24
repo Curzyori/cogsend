@@ -3,6 +3,12 @@ import type { RequestHandler } from './$types';
 import { parseDraftBody, parseDraftTitle } from '$lib/domain/validation/draft-fields';
 import { batchQueries, chunkIds, newId } from '$lib/server/db/client';
 import {
+	DRAFTS_LIST_LIMIT,
+	DRAFTS_LIST_MAX_LIMIT,
+	loadDraftSummaries,
+	parseListLimit
+} from '$lib/server/post-list';
+import {
 	connections,
 	draftMedia,
 	drafts,
@@ -14,19 +20,20 @@ import { requireScope, requireUser } from '$lib/server/require';
 import { serializeDraft } from '$lib/server/serialize';
 import { normalizeSelectedConnectionIds } from '$lib/domain/request-limits';
 
-// Route-local: SvelteKit only allows specific named exports from +server
-// modules, so these stay module-private.
-const DRAFTS_LIST_LIMIT = 200;
-const DRAFTS_LIST_MAX_LIMIT = 500;
-
 export const GET: RequestHandler = async ({ locals, url }) => {
 	try {
 		const user = requireUser(locals.user);
 		requireScope(locals, 'read');
-		const requested = parseInt(url?.searchParams.get('limit') ?? '', 10);
-		const limit = Number.isFinite(requested)
-			? Math.min(DRAFTS_LIST_MAX_LIMIT, Math.max(1, Math.floor(requested)))
-			: DRAFTS_LIST_LIMIT;
+		const limit = parseListLimit(
+			url?.searchParams.get('limit'),
+			DRAFTS_LIST_LIMIT,
+			DRAFTS_LIST_MAX_LIMIT
+		);
+		// Card payload for the posts page. The default response stays the full
+		// draft (variants included) so existing API clients are unchanged.
+		if (url?.searchParams.get('view') === 'summary') {
+			return ok(await loadDraftSummaries(locals.db, user.id, limit));
+		}
 		// One extra row tells the client a longer history exists without a
 		// second count query.
 		const rows = await locals.db

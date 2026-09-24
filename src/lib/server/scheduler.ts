@@ -1,6 +1,7 @@
 import {
 	and,
 	asc,
+	count,
 	desc,
 	eq,
 	gt,
@@ -78,7 +79,7 @@ export async function schedulerHealth(db: AppDb, now = new Date()): Promise<Sche
 	const [rows, stuckRows, overdueRows] = (await batchQueries(db, [
 		db.select().from(schedulerHeartbeats).where(eq(schedulerHeartbeats.id, HEARTBEAT_ID)),
 		db
-			.select({ id: publishTargets.id })
+			.select({ n: count() })
 			.from(publishTargets)
 			.where(
 				and(
@@ -88,7 +89,7 @@ export async function schedulerHealth(db: AppDb, now = new Date()): Promise<Sche
 				)
 			),
 		db
-			.select({ id: publishTargets.id })
+			.select({ n: count() })
 			.from(publishTargets)
 			.where(
 				and(
@@ -97,9 +98,13 @@ export async function schedulerHealth(db: AppDb, now = new Date()): Promise<Sche
 					lte(publishTargets.scheduledFor, now)
 				)
 			)
-	])) as [{ lastOkAt: Date }[], { id: string }[], { id: string }[]];
-	const stuckPublishing = stuckRows.length;
-	const overdue = overdueRows.length;
+	])) as [{ lastOkAt: Date }[], { n: unknown }[], { n: unknown }[]];
+	const asCount = (value: unknown) => {
+		const n = typeof value === 'bigint' ? Number(value) : Number(value);
+		return Number.isFinite(n) ? n : 0;
+	};
+	const stuckPublishing = asCount(stuckRows[0]?.n);
+	const overdue = asCount(overdueRows[0]?.n);
 	const row = rows[0];
 	// `lastTickAt` stays null until the first tick ever. That difference matters
 	// to the UI: a fresh instance whose cron was never attached has nothing to

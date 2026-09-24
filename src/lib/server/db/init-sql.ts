@@ -236,10 +236,20 @@ async function tableColumns(d1: D1Database, table: string): Promise<Set<string>>
 	return new Set((res.results ?? []).map((r) => r.name));
 }
 
-async function addColumnIfMissing(d1: D1Database, table: string, name: string, ddl: string) {
+/** One `table_info` per table, then only the columns that are actually missing. */
+async function addMissingColumns(
+	d1: D1Database,
+	table: string,
+	columns: { name: string; ddl: string }[]
+) {
 	const cols = await tableColumns(d1, table);
-	if (cols.has(name)) return;
-	await d1.prepare(`ALTER TABLE ${table} ADD COLUMN ${ddl}`).run();
+	// No rows means the table is not there yet. The CREATE that follows builds
+	// it with these columns, so an ALTER here would only fail.
+	if (cols.size === 0) return;
+	for (const column of columns) {
+		if (cols.has(column.name)) continue;
+		await d1.prepare(`ALTER TABLE ${table} ADD COLUMN ${column.ddl}`).run();
+	}
 }
 
 // Memoized per binding: Workers isolates reuse the same D1 binding across
@@ -274,20 +284,21 @@ export async function ensureSchema(d1: D1Database) {
 		await execStatements(d1, INIT_SQL);
 		return;
 	}
-	await addColumnIfMissing(d1, 'users', 'totp_enabled', 'totp_enabled integer NOT NULL DEFAULT 0');
-	await addColumnIfMissing(d1, 'users', 'totp_secret_enc', 'totp_secret_enc text');
-	await addColumnIfMissing(d1, 'users', 'totp_enrolled_at', 'totp_enrolled_at integer');
-	await addColumnIfMissing(d1, 'users', 'totp_last_step', 'totp_last_step integer');
-	await addColumnIfMissing(d1, 'users', 'settings_json', 'settings_json text');
-	await addColumnIfMissing(d1, 'users', 'display_name', 'display_name text');
-	await addColumnIfMissing(d1, 'drafts', 'selected_connection_ids', 'selected_connection_ids text');
-	await addColumnIfMissing(d1, 'api_keys', 'scopes', 'scopes text');
-	await addColumnIfMissing(
-		d1,
-		'sessions',
-		'mfa_verified',
-		'mfa_verified integer NOT NULL DEFAULT 0'
-	);
+	await addMissingColumns(d1, 'users', [
+		{ name: 'totp_enabled', ddl: 'totp_enabled integer NOT NULL DEFAULT 0' },
+		{ name: 'totp_secret_enc', ddl: 'totp_secret_enc text' },
+		{ name: 'totp_enrolled_at', ddl: 'totp_enrolled_at integer' },
+		{ name: 'totp_last_step', ddl: 'totp_last_step integer' },
+		{ name: 'settings_json', ddl: 'settings_json text' },
+		{ name: 'display_name', ddl: 'display_name text' }
+	]);
+	await addMissingColumns(d1, 'drafts', [
+		{ name: 'selected_connection_ids', ddl: 'selected_connection_ids text' }
+	]);
+	await addMissingColumns(d1, 'api_keys', [{ name: 'scopes', ddl: 'scopes text' }]);
+	await addMissingColumns(d1, 'sessions', [
+		{ name: 'mfa_verified', ddl: 'mfa_verified integer NOT NULL DEFAULT 0' }
+	]);
 	await execStatements(
 		d1,
 		`
