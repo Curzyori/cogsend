@@ -9,7 +9,7 @@
 		"type": "git",
 		"url": "git+https://github.com/deepakness/cogsend.git"
 	},
-	"homepage": "https://github.com/deepakness/cogsend#readme",
+	"homepage": "https://cogsend.com",
 	"bugs": {
 		"url": "https://github.com/deepakness/cogsend/issues"
 	},

@@ -88,6 +88,8 @@ release tags and rolling back.
 
 ## Documentation
 
+Also published, with search, at [cogsend.com/docs](https://cogsend.com/docs/).
+
 | Page                                       | What is in it                                                                                                 |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | [Deploying](docs/deploy.md)                | the install and its flags, checking it worked, updating and rolling back, deploying by hand                   |
