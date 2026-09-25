@@ -13,21 +13,11 @@
 <p align="center">
   <a href="#install">Install</a>
   ·
-  <a href="#updating">Updating</a>
-  ·
-  <a href="#features">Features</a>
-  ·
   <a href="#documentation">Documentation</a>
-  ·
-  <a href="#stack">Stack</a>
-  ·
-  <a href="docs/deploy.md">Deploy guide</a>
   ·
   <a href="docs/api.md">API</a>
   ·
-  <a href="CONTRIBUTING.md">Contributing</a>
-  ·
-  <a href="SECURITY.md">Security</a>
+  <a href="#contributing">Contributing</a>
 </p>
 
 <p align="center">
@@ -39,6 +29,10 @@
 </p>
 
 https://github.com/user-attachments/assets/4e1e623b-e862-4f70-8b48-b764590834f5
+
+## Why CogSend
+
+Hosted schedulers usually charge per channel and keep your posts and tokens on their servers. CogSend runs on your own Cloudflare account instead: your data stays in your own D1 database and R2 bucket, posts go out through your own API credentials, and there is no subscription to keep paying.
 
 ## Features
 
@@ -73,6 +67,10 @@ It is safe to re-run: resources, secrets and the account are reused, not replace
 [docs/deploy.md](docs/deploy.md#one-command) lists what it does and every flag. Lost the password or the authenticator later?
 `npm run admin:reset -- --all` from your checkout
 ([Configuration → The login](docs/configuration.md#the-login)).
+
+## What it costs
+
+A single-admin instance normally stays within Cloudflare's free plans, though R2 needs a payment method on file. The Workers free plan allows five cron triggers per account, shared with every Worker you run; if none are left, an external pinger drives the schedule instead ([Scheduling](docs/scheduling.md#pick-one-tick)). On the free plan a backlog of due posts drains a post or two a minute, and a paid Workers plan publishes everything due at once.
 
 ## Updating
 
@@ -117,6 +115,8 @@ calling `/api/internal/tick`.
 [docs/development.md](docs/development.md) has local setup and the checks that
 must pass; [CONTRIBUTING.md](CONTRIBUTING.md) has the pull-request rules. Security
 issues: [SECURITY.md](SECURITY.md) — report them privately.
+
+If CogSend is useful to you, [sponsoring](https://github.com/sponsors/deepakness) supports my time maintaining it.
 
 ## License
 
