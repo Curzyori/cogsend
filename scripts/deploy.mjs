@@ -10,24 +10,36 @@
 import { spawnSync } from 'node:child_process';
 import * as ui from './lib/cli.mjs';
 import { syncMigrations } from './lib/migration-sync.mjs';
+import { runWrangler, wranglerOutput } from './lib/wrangler-run.mjs';
+
+/** One line in place of the progress line, then the progress line again. */
+function retryNotice(progressText) {
+	return () => {
+		ui.clearProgress();
+		ui.note('Cloudflare login was just refreshed, retrying…');
+		ui.progress(progressText);
+	};
+}
 
 /**
  * Run one step quietly.
  *
  * @param {string} label what the step is, for the failure line
- * @param {string} cmd @param {string[]} args
+ * @param {string} cmd @param {string[]} args `cmd` of `wrangler` goes through
+ *   scripts/wrangler.mjs, with a retry for a refused fresh login
  * @param {string} [progressText] what the terminal shows while it runs
  * @returns {{ text: string, elapsedMs: number }}
  */
 function run(label, cmd, args, progressText = label) {
 	const startedAt = Date.now();
 	ui.progress(progressText);
-	const result = spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+	const result =
+		cmd === 'wrangler'
+			? runWrangler(args, { onRetry: retryNotice(progressText) })
+			: spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 	ui.clearProgress();
-	const stdout = result.stdout ?? '';
-	const stderr = result.stderr ?? '';
 	const status = result.status ?? 1;
-	const text = `${stdout}${stderr}`;
+	const text = wranglerOutput(result);
 	const verbose = ui.isVerbose();
 	if (verbose) {
 		ui.note(`$ ${cmd} ${args.join(' ')}`);
@@ -43,13 +55,14 @@ function run(label, cmd, args, progressText = label) {
 
 /** `wrangler d1 execute --json`, through the repo wrapper. */
 function d1Json(sql) {
-	const result = spawnSync(
-		'node',
-		['scripts/wrangler.mjs', 'd1', 'execute', 'DB', '--remote', '--json', '--command', sql],
-		{ encoding: 'utf8' }
-	);
+	const result = runWrangler(['d1', 'execute', 'DB', '--remote', '--json', '--command', sql], {
+		onRetry: retryNotice('checking the database')
+	});
 	if (result.status !== 0) {
-		process.stderr.write(result.stderr || result.stdout || 'd1 execute failed\n');
+		// Both streams: the wrapper's command line is on stderr, and with --json
+		// wrangler writes Cloudflare's error to stdout.
+		process.stderr.write(`${ui.stripToolNoise(wranglerOutput(result))}\n`);
+		ui.error('checking the database failed — nothing was deployed.');
 		process.exit(result.status ?? 1);
 	}
 	const parsed = JSON.parse(result.stdout);
@@ -75,8 +88,8 @@ if (recorded.length) ui.note(`${recorded.length} migrations already present, rec
 
 const migrate = run(
 	'the migrations',
-	'node',
-	['scripts/wrangler.mjs', 'd1', 'migrations', 'apply', 'DB', '--remote'],
+	'wrangler',
+	['d1', 'migrations', 'apply', 'DB', '--remote'],
 	'applying migrations'
 );
 ui.ok(ui.migrationsSummary(migrate.text) ?? 'remote database up to date');
@@ -84,7 +97,7 @@ ui.ok(ui.migrationsSummary(migrate.text) ?? 'remote database up to date');
 const build = run('the build', 'npm', ['run', 'build'], 'building');
 ui.ok(`built in ${ui.duration(build.elapsedMs)}`);
 
-const deploy = run('the deploy', 'node', ['scripts/wrangler.mjs', 'deploy'], 'deploying');
+const deploy = run('the deploy', 'wrangler', ['deploy'], 'deploying');
 const facts = ui.deployFacts(deploy.text);
 ui.ok(`deployed in ${ui.duration(deploy.elapsedMs)}`);
 if (facts.bindings.length) ui.note(facts.bindings.join(' · '));

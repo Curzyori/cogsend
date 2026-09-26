@@ -14,11 +14,11 @@
  *   npm run db:migrate:local                        # the local one
  *   npm run db:migrate:local -- --persist-to .wrangler/e2e-state
  */
-import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ui from './lib/cli.mjs';
 import { syncMigrations } from './lib/migration-sync.mjs';
+import { runWrangler, wranglerOutput } from './lib/wrangler-run.mjs';
 
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'));
 
@@ -29,35 +29,39 @@ const scope = local ? '--local' : '--remote';
 
 /** Through the repo wrapper, so `wrangler.personal.jsonc` and WRANGLER_PROFILE
  *  apply as they do everywhere else. */
-function wrangler(args, { capture = false } = {}) {
-	return spawnSync('node', ['scripts/wrangler.mjs', ...args], {
-		encoding: 'utf8',
-		stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit'
+function wrangler(args) {
+	return runWrangler(args, {
+		onRetry: () => ui.note('Cloudflare login was just refreshed, retrying…')
 	});
 }
 
+/** Both streams: the wrapper's command line is on stderr, Cloudflare's error on stdout. */
+function fail(result, what) {
+	process.stderr.write(`${ui.stripToolNoise(wranglerOutput(result))}\n`);
+	ui.error(`${what} failed (${local ? 'local' : 'remote'} database).`);
+	process.exit(result.status ?? 1);
+}
+
 function d1Json(sql) {
-	const result = wrangler(
-		['d1', 'execute', 'DB', scope, ...passthrough, '--json', '--command', sql],
-		{ capture: true }
-	);
-	if (result.status !== 0) {
-		process.stderr.write(result.stderr || result.stdout || 'd1 execute failed\n');
-		process.exit(result.status ?? 1);
-	}
+	const result = wrangler([
+		'd1',
+		'execute',
+		'DB',
+		scope,
+		...passthrough,
+		'--json',
+		'--command',
+		sql
+	]);
+	if (result.status !== 0) fail(result, 'checking the database');
 	const parsed = JSON.parse(result.stdout);
 	return parsed[0]?.results ?? [];
 }
 
 const { recorded } = await syncMigrations({
 	exec: async (sql) => {
-		const result = wrangler(['d1', 'execute', 'DB', scope, ...passthrough, '--command', sql], {
-			capture: true
-		});
-		if (result.status !== 0) {
-			process.stderr.write(result.stderr || result.stdout || 'd1 execute failed\n');
-			process.exit(result.status ?? 1);
-		}
+		const result = wrangler(['d1', 'execute', 'DB', scope, ...passthrough, '--command', sql]);
+		if (result.status !== 0) fail(result, 'recording migrations');
 	},
 	query: async (sql) => d1Json(sql),
 	log: () => {}
@@ -65,15 +69,9 @@ const { recorded } = await syncMigrations({
 
 // Captured: wrangler reprints its whole table after every migration applied, so
 // a first run is ~300 lines of box drawing. The summary is the news.
-const applied = wrangler(['d1', 'migrations', 'apply', 'DB', scope, ...passthrough], {
-	capture: true
-});
-const text = `${applied.stdout}${applied.stderr}`;
-if (applied.status !== 0) {
-	process.stderr.write(`${ui.stripToolNoise(text)}\n`);
-	ui.error(`applying migrations failed (${local ? 'local' : 'remote'} database).`);
-	process.exit(applied.status ?? 1);
-}
+const applied = wrangler(['d1', 'migrations', 'apply', 'DB', scope, ...passthrough]);
+const text = wranglerOutput(applied);
+if (applied.status !== 0) fail(applied, 'applying migrations');
 if (ui.isVerbose()) process.stdout.write(`${ui.stripToolNoise(text)}\n`);
 ui.ok(ui.migrationsSummary(text) ?? `${local ? 'local' : 'remote'} database up to date`);
 if (recorded.length) ui.note(`${recorded.length} already present, recorded as applied`);
