@@ -1,47 +1,52 @@
 # Connect through Zernio
 
-[Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide) is an optional publishing provider with a free plan, and a sponsor of CogSend. It holds approved developer apps for X, Threads, LinkedIn and Bluesky, so an account connected through it publishes without an app of your own: no LinkedIn app review, no Meta app, no X developer project. X through Zernio needs a card on your Zernio account. CogSend still writes, schedules, retries and records everything; Zernio only carries the publish.
+LinkedIn, Threads and X normally need a developer app of your own before CogSend can post to them ([OAuth apps](oauth-apps.md)). [Zernio](https://zernio.com/?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide) is a way around that: it already has approved apps for X, Threads, LinkedIn and Bluesky, and CogSend can publish through them instead.
 
-Direct connections stay the default. Nothing here changes an account you connected with your own app, and the two kinds sit side by side on the Accounts page (Zernio-backed rows say **via Zernio**).
+Nothing else changes. You still write, schedule and retry in CogSend, and your posts and history stay on your Cloudflare account; Zernio only carries the publish. Zernio has a free plan, though connecting X needs a card on your Zernio account ([pricing](https://zernio.com/pricing?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide-pricing)). Zernio also sponsors CogSend.
 
-[Pricing](https://zernio.com/pricing?utm_source=cogsend&utm_medium=sponsorship&utm_campaign=cogsend-integration&utm_content=provider-guide-pricing) · [Use your own apps instead](oauth-apps.md)
+It is optional. Direct connections stay the default, accounts you connected with your own apps are not touched, and both kinds can sit side by side on **Accounts**, where the Zernio ones are marked **via Zernio**. Mastodon is not available through Zernio.
 
 ## What you need
 
-- A Zernio account with a profile, and an API key from **zernio.com → API keys**. A key restricted to the **publishing** and **accounts** groups is enough; it must be read-write. Keys limited to other profiles cannot see the accounts you want to import.
-- A deployed CogSend, or a local one for import only: Zernio fetches your images from the instance's public media URL, so a `localhost` instance can import and post text, but not media.
+- A Zernio account and an API key from **zernio.com → API keys**. The key must be read-write, and needs at least the **publishing** and **accounts** groups. A key limited to certain Zernio profiles only sees the accounts in those profiles.
+- A deployed instance if you want to post images or video. Zernio fetches media from your instance's public URL, so a local instance can connect accounts and post text, but not media.
 
 ## Import accounts you already have in Zernio
 
-1. **Accounts → Connect new → Zernio.** Paste the key and press **Show my Zernio accounts**.
-2. Tick the accounts to import and press **Import**. Each becomes an ordinary account here: it gets its platform's editor tab, limits and marks, and shows **via Zernio**.
-3. The key is stored encrypted on each imported row. Opening the Zernio dialog again reuses it; paste a new key to replace it on the next import.
+1. Open **Accounts → Connect new** and choose **Connect through Zernio**, below the platforms.
+2. Paste your API key and press **Show my Zernio accounts**.
+3. Tick the accounts you want and press **Import**.
+
+Each imported account behaves like any other: it gets its platform's tab in the composer, with the same limits. The key is stored encrypted, so next time you open the Zernio panel you can leave the field blank. Paste a new key to replace it.
 
 ## Connect a new account through Zernio
 
-In the same dialog, pick the platform and the Zernio profile under **Connect a new account through Zernio** and press **Connect**. You authorize on the platform, Zernio records the account, and you land back on Accounts with it imported.
+In the same panel, under **Connect a new account through Zernio**, pick the platform and the Zernio profile and press **Connect**. You approve CogSend on the platform, and come back to **Accounts** with the account added.
 
-**Reconnect** on a Zernio-backed row starts the same flow; **Check** asks Zernio whether the account still has a live token.
+The same option appears when you pick LinkedIn, Threads or X on an instance that has no app set up for it: the setup steps end with a link to connect through Zernio instead.
 
-Bluesky is the exception: connect or reconnect it in Zernio's own dashboard, then import it (or press **Check**) here. Zernio's hosted Bluesky page cannot yet hand the account back to CogSend.
+Bluesky can only be imported for now. Connect it in Zernio's own dashboard first, then import it here.
 
-## What works the same, and what differs
+## Reconnecting and checking
 
-| Feature                  | Through Zernio                                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Compose, schedule, queue | Unchanged. CogSend's scheduler publishes at the scheduled minute by asking Zernio to publish now.                                            |
-| Threads                  | X, Threads and Bluesky threads publish as threads. LinkedIn gets one post with the segments joined, as with a direct connection.             |
-| Images and video         | Sent to Zernio as URLs on your instance, fetched at publish time. Platform size and format limits still apply.                               |
-| Posts, retries, Insights | Unchanged. A publish is confirmed against Zernio before it is marked published; failures carry Zernio's reason.                              |
-| Duplicates               | Zernio refuses the same text to the same account within 24 hours. The post parks as failed with that reason.                                 |
-| Tokens                   | Zernio holds them and refreshes them. When a platform revokes one, the account shows **expired** here and **Reconnect** goes through Zernio. |
-| Mastodon                 | Not available through Zernio: connect it directly.                                                                                           |
+On a Zernio account, **Reconnect** goes through Zernio, and **Check** asks Zernio whether the account still works. A Bluesky account is reconnected in Zernio's dashboard; press **Check** here afterwards.
+
+Disconnecting an account in CogSend does not remove it from Zernio. Remove it there if you no longer need it.
+
+## What is different through Zernio
+
+| Area              | Through Zernio                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Scheduling        | The same. At the scheduled minute, CogSend asks Zernio to publish immediately.                                                      |
+| Threads           | X, Threads and Bluesky threads post as threads. LinkedIn gets a single post with the parts joined, the same as a direct connection. |
+| Images and video  | Zernio fetches them from your instance when the post goes out. Each platform's size and format limits still apply.                  |
+| Posts and retries | The same. A post is only marked published once Zernio confirms it, and a failure shows Zernio's reason.                             |
+| Duplicates        | Zernio refuses the same text to the same account within 24 hours. The post fails with that reason and is not retried.               |
+| Tokens            | Zernio keeps and refreshes them. If a platform revokes one, the account shows as expired here.                                      |
 
 ## Troubleshooting
 
-- **"Zernio rejected this API key"**: the key is wrong, revoked or expired. Create a new one and import again.
-- **"This Zernio API key cannot be used here"**: the key is read-only or lacks the publishing or accounts group.
-- **A post parks with a Zernio reason**: read it in Posts. Content limits and platform refusals are the same ones a direct connection meets.
-- **Media fails on a local instance**: Zernio cannot reach `localhost`. Deploy, or set `MEDIA_PUBLIC_BASE_URL` to a public origin.
-
-Disconnecting an account here does not remove it from Zernio. Manage it there separately.
+- **"Zernio rejected this API key"**: the key is wrong, revoked or expired. Create a new one and paste it in the Zernio panel.
+- **"This Zernio API key cannot be used here"**: the key is read-only, or lacks the publishing or accounts group.
+- **A post fails with a Zernio reason**: the reason is shown in **Posts**. Content limits and platform refusals are the same as with a direct connection.
+- **Images fail on a local instance**: Zernio cannot reach `localhost`. Deploy the instance, or set `MEDIA_PUBLIC_BASE_URL` to a public address.
