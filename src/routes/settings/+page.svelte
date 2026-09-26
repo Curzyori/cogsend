@@ -2,9 +2,10 @@
 	import { formatDistanceToNow } from 'date-fns';
 	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
-	import { Pencil, User } from '@lucide/svelte';
+	import { Check, Copy, Pencil, User } from '@lucide/svelte';
 	import AccountAvatar from '$lib/components/AccountAvatar.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import CopyButton from '$lib/components/CopyButton.svelte';
 	import { humanizeError } from '$lib/domain/human-error';
 	import { sessionExpiredIfUnauthorized } from '$lib/components/session-expired';
 	import { accountLabel, displayHandle, platformRank } from '$lib/domain/platforms';
@@ -140,6 +141,7 @@
 		scopes?: string[] | null;
 	};
 	let keyActive = $state<KeyMeta | null>(null);
+	let keyScopes = $state<'read' | 'read-write'>('read-write');
 	let keyLoading = $state(true);
 	// The stored key status actually arrived: without it a failed fetch would
 	// render "No active key" and invite a rotation that was never needed.
@@ -149,6 +151,49 @@
 	let keyCopied = $state(false);
 	let keyConfirm: 'rotate' | 'revoke' | null = $state(null);
 	let keyJustRotated = $state(false);
+	let mcpCopied = $state<string | null>(null);
+	let mcpCopiedTimer: ReturnType<typeof setTimeout> | null = null;
+	let mcpClient = $state<'claude' | 'codex'>('claude');
+	const mcpUrl = $derived(tickOrigin ? `${tickOrigin}/api/mcp` : '/api/mcp');
+	const claudeMcpConfig = $derived(
+		JSON.stringify(
+			{
+				mcpServers: {
+					cogsend: {
+						type: 'http',
+						url: mcpUrl,
+						headers: { Authorization: 'Bearer ${COGSEND_API_KEY}' }
+					}
+				}
+			},
+			null,
+			2
+		)
+	);
+	const codexMcpConfig = $derived(
+		[
+			'[mcp_servers.cogsend]',
+			`url = "${mcpUrl}"`,
+			'bearer_token_env_var = "COGSEND_API_KEY"',
+			'default_tools_approval_mode = "prompt"'
+		].join('\n')
+	);
+	const mcpClients = $derived([
+		{
+			id: 'claude' as const,
+			label: 'Claude Code',
+			file: '.mcp.json',
+			what: 'config',
+			text: claudeMcpConfig
+		},
+		{
+			id: 'codex' as const,
+			label: 'OpenAI Codex',
+			file: '~/.codex/config.toml',
+			what: 'config',
+			text: codexMcpConfig
+		}
+	]);
 	// The form stays disabled until the first load resolves: applying slow
 	// fetch results over user edits (and then saving them) would silently
 	// reset their choices. `prefsLoaded` separates "the request finished" from
@@ -539,7 +584,11 @@
 		keyBusy = true;
 		err = null;
 		try {
-			const res = await fetch('/api/key', { method: 'POST' });
+			const res = await fetch('/api/key', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ scopes: keyScopes === 'read' ? ['read'] : ['read', 'write'] })
+			});
 			const payload = await res.json();
 			if (!res.ok) throw new Error(payload.error || 'Could not create key');
 			// The raw key exists only in this response — show it once.
@@ -588,6 +637,26 @@
 		keyRevealed = null;
 		keyCopied = false;
 		keyJustRotated = false;
+	}
+
+	async function copyMcpExample(name: string, text: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+			mcpCopied = name;
+			if (mcpCopiedTimer) clearTimeout(mcpCopiedTimer);
+			mcpCopiedTimer = setTimeout(() => (mcpCopied = null), 2000);
+		} catch {
+			err = 'Could not copy the example — select and copy it instead.';
+		}
+	}
+
+	function mcpTabKey(event: KeyboardEvent) {
+		const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+		if (!step) return;
+		event.preventDefault();
+		const at = mcpClients.findIndex((client) => client.id === mcpClient);
+		mcpClient = mcpClients[(at + step + mcpClients.length) % mcpClients.length].id;
+		document.getElementById(`mcp-tab-${mcpClient}`)?.focus();
 	}
 
 	function keyDate(iso: string | null): string {
@@ -964,21 +1033,34 @@
 		</div>
 
 		<div
-			class="rounded-[2rem] border border-stone-200/80 bg-white p-6 shadow-[0_8px_30px_-12px_rgb(28_25_23/0.06)] sm:p-8"
+			class="min-w-0 rounded-[2rem] border border-stone-200/80 bg-white p-6 shadow-[0_8px_30px_-12px_rgb(28_25_23/0.06)] sm:p-8"
 			aria-label="API access"
 			data-testid="api-key-section"
 		>
 			<h2 class="mb-2 text-[17px] font-extrabold tracking-tight text-stone-900">API access</h2>
 			<p class="mb-6 max-w-md text-[13px] leading-relaxed font-medium text-stone-500">
-				Use this personal API key for scripts, Shortcuts, and cron jobs. It grants full programmatic
-				access to manage your drafts, publish posts, and view your queue. For security, it cannot be
-				used to manage social accounts, change credentials, or generate new API keys. See the
+				Use this personal API key for scripts, Shortcuts, and cron jobs. Choose whether it can only
+				read or also change and publish drafts. For security, it cannot manage social accounts,
+				change credentials, or generate new API keys. See the
 				<a
 					href="/api"
 					class="font-bold text-stone-900 underline underline-offset-2 hover:text-stone-700"
 					>API reference</a
 				> for full details.
 			</p>
+			<fieldset class="mb-5 space-y-2" data-testid="api-key-scopes">
+				<legend class="mb-2 text-[12px] font-bold text-stone-700">New key permissions</legend>
+				<label class="flex cursor-pointer items-start gap-2 text-[13px] text-stone-700">
+					<input type="radio" name="api-key-scopes" value="read" bind:group={keyScopes} />
+					<span><strong>Read-only</strong> — view connections, drafts, and queue.</span>
+				</label>
+				<label class="flex cursor-pointer items-start gap-2 text-[13px] text-stone-700">
+					<input type="radio" name="api-key-scopes" value="read-write" bind:group={keyScopes} />
+					<span
+						><strong>Read + write</strong> — manage drafts and publish; includes read. (Default)</span
+					>
+				</label>
+			</fieldset>
 			{#if keyLoading}
 				<p class="text-sm font-medium text-stone-500">Loading…</p>
 			{:else if keyRevealed}
@@ -1082,6 +1164,109 @@
 					Generate API key
 				</button>
 			{/if}
+
+			<section class="mt-8 min-w-0 border-t border-stone-200/80 pt-7" data-testid="mcp-setup">
+				<h3 class="text-[15px] font-extrabold tracking-tight text-stone-900">
+					Connect an MCP client
+				</h3>
+				<p class="mt-2 max-w-prose text-[13px] leading-relaxed font-medium text-stone-500">
+					CogSend's stateless Streamable HTTP server lets coding agents work with drafts and
+					publishing. Use an active personal API key; the endpoint does not use your browser
+					session.
+				</p>
+
+				<div
+					class="mt-4 flex items-center gap-3 rounded-xl border border-stone-200/80 bg-stone-50 py-1 pr-1 pl-3"
+				>
+					<span class="shrink-0 text-[12px] font-bold text-stone-500">Endpoint</span>
+					<code
+						class="min-w-0 flex-1 [scrollbar-width:none] overflow-x-auto font-mono text-[12px] whitespace-nowrap text-stone-900 select-all"
+						data-testid="mcp-endpoint">{mcpUrl}</code
+					>
+					<CopyButton value={mcpUrl} ariaLabel="Copy the MCP endpoint URL" />
+				</div>
+
+				<div class="mt-6 min-w-0">
+					<div
+						role="tablist"
+						aria-label="MCP client"
+						class="grid grid-cols-2 gap-1 rounded-full bg-stone-100 p-1 sm:inline-grid"
+					>
+						{#each mcpClients as client (client.id)}
+							<button
+								type="button"
+								role="tab"
+								id="mcp-tab-{client.id}"
+								aria-selected={mcpClient === client.id}
+								aria-controls="mcp-panel-{client.id}"
+								tabindex={mcpClient === client.id ? 0 : -1}
+								onclick={() => (mcpClient = client.id)}
+								onkeydown={mcpTabKey}
+								class="rounded-full px-1.5 py-1.5 text-[11px] font-bold whitespace-nowrap transition-colors sm:px-4 sm:text-[12px] {mcpClient ===
+								client.id
+									? 'bg-white text-stone-900 shadow-sm'
+									: 'text-stone-500 hover:text-stone-900'}"
+							>
+								{client.label}
+							</button>
+						{/each}
+					</div>
+
+					{#each mcpClients as client (client.id)}
+						<div
+							role="tabpanel"
+							id="mcp-panel-{client.id}"
+							aria-labelledby="mcp-tab-{client.id}"
+							hidden={mcpClient !== client.id}
+							class="mt-3"
+						>
+							<div class="overflow-hidden rounded-xl bg-stone-950">
+								<div
+									class="flex items-center justify-between gap-3 border-b border-white/10 py-1.5 pr-1.5 pl-4"
+								>
+									<span class="truncate font-mono text-[11px] text-stone-400">{client.file}</span>
+									<button
+										type="button"
+										onclick={() => copyMcpExample(client.id, client.text)}
+										aria-label="Copy the {client.label} {client.what}"
+										class="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-stone-300 transition-colors hover:bg-white/10 hover:text-white"
+									>
+										{#if mcpCopied === client.id}
+											<Check class="h-3.5 w-3.5 text-emerald-400" /> Copied
+										{:else}
+											<Copy class="h-3.5 w-3.5" /> Copy
+										{/if}
+									</button>
+								</div>
+								<pre
+									class="overflow-x-auto p-4 text-[12px] leading-relaxed text-stone-100 [color-scheme:dark]"><code
+										>{client.text}</code
+									></pre>
+							</div>
+							<p class="mt-2.5 max-w-prose text-[12px] leading-relaxed text-stone-500">
+								{#if client.id === 'claude'}
+									Add this to <code class="font-mono text-stone-900">.mcp.json</code>. Claude Code
+									expands the environment variable in remote HTTP headers. Set
+									<code class="font-mono text-stone-900">COGSEND_API_KEY</code> securely in the environment
+									before starting Claude Code; never put its value in this file.
+								{:else if client.id === 'codex'}
+									Add this to <code class="font-mono text-stone-900">~/.codex/config.toml</code>.
+									Codex reads the bearer value from the named environment variable. The prompt
+									approval mode asks before tool calls.
+								{/if}
+							</p>
+						</div>
+					{/each}
+				</div>
+
+				<p class="mt-5 max-w-prose text-[12px] leading-relaxed text-stone-500">
+					Give an agent a Read-only key unless it needs to change drafts or publish, and have your
+					client ask before it publishes. Tools, scopes and Cloudflare Access headers are in the
+					<a href="/api#mcp-server-heading" class="font-bold text-stone-900 underline"
+						>API reference</a
+					>.
+				</p>
+			</section>
 		</div>
 
 		<div
@@ -1609,7 +1794,7 @@
 	body={keyConfirm === 'revoke'
 		? 'Scripts and automations using the current key stop working immediately.'
 		: keyActive
-			? 'The current key stops working immediately. The new key is shown once.'
+			? 'Generating a replacement revokes the previous key immediately. The new key is shown once.'
 			: 'The new key is shown once. Copy it before closing.'}
 	confirmLabel={keyConfirm === 'revoke' ? 'Revoke' : 'Generate'}
 	cancelLabel="Keep"

@@ -1,7 +1,7 @@
 # API
 
-The browser UI uses the `cog_session` cookie after TOTP. Scripts, Shortcuts and
-cron use a personal API key instead — no login, no cookies. Manage it in
+The browser UI uses the `cog_session` cookie after TOTP. Scripts, Shortcuts, cron
+and [MCP clients](#mcp-server) use a personal API key instead — no login, no cookies. Manage it in
 **Settings → API access** (generate, rotate, revoke); the raw key is shown once
 and only its hash is stored. Worked examples for the common calls live in-app at
 `/api`.
@@ -25,6 +25,35 @@ rotate, or revoke keys (those stay in the browser session). The global
 exactly the same routes as a personal key — it cannot reach the session-only ones
 either — but prefer the personal key for scripts: it is revocable without
 touching the scheduler.
+
+A key is either **Read-only** or **Read + write**, chosen when you generate it. Read-only can list and fetch connections, drafts and the queue and validate text; anything that creates, changes, deletes, schedules or publishes needs Read + write.
+
+## MCP server
+
+`<your instance>/api/mcp` is a Model Context Protocol server, so agents such as Claude Code and Codex can work with drafts and the publish queue. It is stateless Streamable HTTP over `POST`. It accepts only a personal key as `Authorization: Bearer`: no cookies, no `X-API-Key` and no `API_TOKEN`.
+
+For Claude Code, add this to `.mcp.json` and set `COGSEND_API_KEY` in your environment:
+
+```json
+{
+	"mcpServers": {
+		"cogsend": {
+			"type": "http",
+			"url": "https://cogsend.example.com/api/mcp",
+			"headers": { "Authorization": "Bearer ${COGSEND_API_KEY}" }
+		}
+	}
+}
+```
+
+**Settings → API access** shows this with your own URL, plus the Codex version.
+
+| Tools                                                                                                                                                                                                         | Key needed   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `list_connections`, `list_drafts`, `get_draft`, `list_queue`, `validate_post`                                                                                                                                 | Read-only    |
+| `create_draft`, `update_draft`, `duplicate_draft`, `delete_draft`, `set_draft_variant`, `delete_draft_variant`, `schedule_draft`, `reschedule_delivery`, `cancel_delivery`, `publish_draft`, `retry_delivery` | Read + write |
+
+`publish_draft` and `retry_delivery` post to real accounts. Set your client to ask before it runs tools that write or publish; CogSend marks them, but only the client can stop and ask. Media, settings, insights and account management are not exposed. If Cloudflare Access protects the instance, see [Cloudflare Access](access.md#the-paths-it-has-to-let-through).
 
 ## Examples
 

@@ -43,10 +43,12 @@ import type { SubrequestBudget } from '$lib/server/budget';
 import { randomHex } from '$lib/domain/bytes';
 import { validateImageUpload, validateVideoUpload } from '$lib/domain/media-limits';
 import { validatePollConfig } from '$lib/domain/poll';
-import { assertSafeStorageKey } from '$lib/server/media';
+import { assertSafeStorageKey, deleteMediaObjects } from '$lib/server/media';
 import { STALE_CLAIM_MS } from '$lib/domain/due-jobs';
 import { ApiOperationError } from '$lib/server/api/operation-error';
-import { DRAFTS_LIST_LIMIT, DRAFTS_LIST_MAX_LIMIT } from '$lib/server/post-list';
+import { DRAFTS_LIST_LIMIT, DRAFTS_LIST_MAX_LIMIT, loadQueueList } from '$lib/server/post-list';
+import { listConnections as loadConnectionList } from '$lib/server/connection-list';
+import { loadOwnedDraft } from '$lib/server/draft-record';
 
 export type OperationContext = Pick<App.Locals, 'db' | 'env' | 'media'> & {
 	budget?: SubrequestBudget;
@@ -877,4 +879,46 @@ export async function publishDraft(
 				})
 			: null
 	};
+}
+
+export function listConnections(ctx: OperationContext, userId: string) {
+	return loadConnectionList(ctx.db, ctx.env, userId);
+}
+
+export async function getDraft(ctx: OperationContext, userId: string, draftId: string) {
+	const draft = await loadOwnedDraft(ctx.db, draftId, userId);
+	if (!draft) invalid('Not found', 404);
+	return { draft };
+}
+
+export async function deleteDraft(ctx: OperationContext, userId: string, draftId: string) {
+	const existing = await first(
+		ctx.db
+			.select()
+			.from(drafts)
+			.where(and(eq(drafts.id, draftId), eq(drafts.userId, userId)))
+	);
+	if (!existing) invalid('Not found', 404);
+	const liveTargets = await ctx.db
+		.select()
+		.from(publishTargets)
+		.where(eq(publishTargets.draftId, draftId));
+	// Deleting mid-publish orphans the remote post (fenced write finds
+	// no row → `preempted` with no record) and races media cleanup.
+	if (draftHasInFlightPublish(liveTargets))
+		invalid('Publishing in progress — try again shortly', 409);
+	const files = await ctx.db.select().from(draftMedia).where(eq(draftMedia.draftId, draftId));
+	// Delete R2 objects BEFORE the draft row: a crash between the two
+	// then leaves rows behind (retryable) instead of orphaned bytes.
+	// Object deletes are idempotent, so retrying is safe.
+	await deleteMediaObjects(
+		ctx.media,
+		files.map((file) => file.storageKey)
+	);
+	await ctx.db.delete(drafts).where(eq(drafts.id, draftId));
+	return { ok: true as const };
+}
+
+export function listQueue(ctx: OperationContext, userId: string, limit: number) {
+	return loadQueueList(ctx.db, userId, limit);
 }
