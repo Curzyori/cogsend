@@ -18,8 +18,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			DRAFTS_LIST_LIMIT,
 			DRAFTS_LIST_MAX_LIMIT
 		);
-		// Card payload for the posts page. The default response stays the full
-		// draft (variants included) so existing API clients are unchanged.
+		// The posts page's smaller payload; the default stays the full draft for API clients.
 		if (url?.searchParams.get('view') === 'summary') {
 			return ok(await loadDraftSummaries(locals.db, user.id, limit));
 		}
@@ -33,9 +32,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		const user = requireUser(locals.user);
 		requireScope(locals, 'write');
-		// Every field here is optional, so an empty body is a legitimate
-		// "create a draft with defaults". Malformed JSON is still a 400 rather
-		// than a 500.
+		// An empty body is valid: every field is optional.
 		const raw = await request.text().catch(() => '');
 		let body: unknown = {};
 		if (raw.trim()) {
